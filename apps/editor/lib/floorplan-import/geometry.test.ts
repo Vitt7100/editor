@@ -3,8 +3,11 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   detectImageCoordinateSpace,
+  extractBounds,
   extractMaxAbs,
+  isImagePixelBox,
   normalizeFloorplanCoords,
+  registerExtractToBox,
   toImagePixels,
   UNIT1000_CANVAS,
 } from './geometry'
@@ -155,4 +158,65 @@ test('toImagePixels maps the unit1000 canvas, not maxAbs, onto W×H', () => {
     (755 / UNIT1000_CANVAS) * 1280,
     5,
   )
+})
+
+const px2 = JSON.parse(
+  readFileSync(join(import.meta.dir, 'fixtures/failing-001-px2/extract.json'), 'utf8'),
+) as ExtractedFloorplan
+const px2Meta = JSON.parse(
+  readFileSync(join(import.meta.dir, 'fixtures/failing-001-px2/meta.json'), 'utf8'),
+) as {
+  width: number
+  height: number
+  contentBox: { minX: number; minY: number; maxX: number; maxY: number }
+}
+
+test('failing-001-px2 is unit1000 and WxH stretch still misses the drawn plan', () => {
+  expect(extractMaxAbs(px2)).toBe(985)
+  const stretched = normalizeFloorplanCoords(px2, FAILING_IMAGE)
+  expect(stretched.space).toBe('unit1000')
+  const bounds = extractBounds(stretched.extracted)
+  expect(bounds?.maxX).toBeCloseTo(1891.2, 1)
+  // Right edge of the drawing is ~1447; 1891 sits in empty margin.
+  expect(bounds?.maxX).toBeGreaterThan(px2Meta.contentBox.maxX + 200)
+})
+
+test('failing-001-px2 registered onto the outer wall sits on the ink, not the margin', () => {
+  const { extracted, space } = normalizeFloorplanCoords(px2, FAILING_IMAGE, {
+    contentBox: px2Meta.contentBox,
+  })
+  expect(space).toBe('pixels')
+  const bounds = extractBounds(extracted)
+  expect(bounds).not.toBeNull()
+  if (!bounds) return
+  expect(bounds.minX).toBeCloseTo(px2Meta.contentBox.minX, 5)
+  expect(bounds.maxX).toBeCloseTo(px2Meta.contentBox.maxX, 5)
+  expect(bounds.minY).toBeCloseTo(px2Meta.contentBox.minY, 5)
+  expect(bounds.maxY).toBeCloseTo(px2Meta.contentBox.maxY, 5)
+  expect(bounds.maxX).toBeLessThan(1500)
+  expect(bounds.minX).toBeGreaterThan(400)
+  expect(extracted.doors).toHaveLength(px2.doors.length)
+  expect(extracted.windows).toHaveLength(px2.windows.length)
+  expect(extracted.openings ?? []).toHaveLength(px2.openings?.length ?? 0)
+})
+
+test('registerExtractToBox does not invent doors', () => {
+  const target = { minX: 100, minY: 50, maxX: 500, maxY: 400 }
+  const registered = registerExtractToBox(px2, target)
+  expect(registered.doors).toHaveLength(px2.doors.length)
+  expect(registered.rooms).toHaveLength(px2.rooms.length)
+})
+
+test('failing-001-px2 with a vision landmark planBounds registers without a raster box', () => {
+  const withLandmark = {
+    ...px2,
+    planBounds: {
+      min: [px2Meta.contentBox.minX, px2Meta.contentBox.minY] as [number, number],
+      max: [px2Meta.contentBox.maxX, px2Meta.contentBox.maxY] as [number, number],
+    },
+  }
+  const { extracted, space } = normalizeFloorplanCoords(withLandmark, FAILING_IMAGE)
+  expect(space).toBe('pixels')
+  expect(extractBounds(extracted)?.maxX).toBeCloseTo(px2Meta.contentBox.maxX, 5)
+  expect(extracted.doors).toHaveLength(px2.doors.length)
 })

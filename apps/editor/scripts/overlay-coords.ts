@@ -28,6 +28,7 @@ export function overlayPoint(
 export function overlayExtracted(
   extracted: ExtractedFloorplan,
   imageSize: { width: number; height: number },
+  contentBox?: { minX: number; minY: number; maxX: number; maxY: number } | null,
 ): ExtractedFloorplan {
-  return normalizeFloorplanCoords(extracted, imageSize).extracted
+  return normalizeFloorplanCoords(extracted, imageSize, { contentBox }).extracted
 }

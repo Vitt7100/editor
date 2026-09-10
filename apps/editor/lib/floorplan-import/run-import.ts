@@ -6,7 +6,9 @@ import { parseImageSize } from './image-size'
 import { IMPORT_TIMEOUT_MESSAGE } from './import-copy'
 import { BAD_IMAGE_MESSAGE, formatImportError } from './import-errors'
 import { updateImportJob } from './jobs'
+import { detectPlanContentBox } from './plan-content'
 import { extractFloorplanFromImage } from './vision'
+import type { PlanContentBox } from './geometry'
 
 export async function runFloorplanImport(jobId: string): Promise<void> {
   const current = updateImportJob(jobId, { status: 'running', stage: 'reading' })
@@ -34,6 +36,7 @@ export async function runFloorplanImport(jobId: string): Promise<void> {
       width: imageSize.width,
       height: imageSize.height,
     })
+    const contentBox = await detectContentBoxFromBytes(bytes)
 
     updateImportJob(jobId, { stage: 'building-scene' })
     const sceneId = generateSlug()
@@ -41,6 +44,7 @@ export async function runFloorplanImport(jobId: string): Promise<void> {
     const built = buildSceneFromFloorplan(extracted, {
       wallHeight: current.wallHeight,
       imageSize,
+      contentBox,
       guide: {
         url: `/api/scenes/${sceneId}/guide`,
         name: current.name,
@@ -76,5 +80,21 @@ export async function runFloorplanImport(jobId: string): Promise<void> {
       error: message,
       base64: undefined,
     })
+  }
+}
+
+async function detectContentBoxFromBytes(bytes: Buffer): Promise<PlanContentBox | null> {
+  try {
+    const mod = await import('sharp')
+    const sharp = mod.default
+    const raster = await sharp(bytes).raw().toBuffer({ resolveWithObject: true })
+    return detectPlanContentBox(
+      raster.data,
+      raster.info.width,
+      raster.info.height,
+      raster.info.channels,
+    )
+  } catch {
+    return null
   }
 }

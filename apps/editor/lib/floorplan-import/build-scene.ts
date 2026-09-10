@@ -18,6 +18,7 @@ import {
   extractPoints,
   median,
   normalizeFloorplanCoords,
+  type PlanContentBox,
   polygonArea,
   polygonBounds,
   projectPointToSegment,
@@ -55,6 +56,7 @@ export type BuildSceneOptions = {
   wallHeight?: number
   guide?: { url: string; name?: string } | null
   imageSize?: ImageSize | null
+  contentBox?: PlanContentBox | null
 }
 
 export type BuiltFloorplanScene = {
@@ -92,7 +94,7 @@ export function buildSceneFromFloorplan(
   const wallHeight = options.wallHeight ?? DEFAULT_WALL_HEIGHT
   const imageSize = options.imageSize ?? null
   const normalized = imageSize
-    ? normalizeFloorplanCoords(extracted, imageSize)
+    ? normalizeFloorplanCoords(extracted, imageSize, { contentBox: options.contentBox })
     : {
         extracted,
         space: detectImageCoordinateSpace(extractPoints(extracted)),

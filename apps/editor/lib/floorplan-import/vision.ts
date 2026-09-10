@@ -1,3 +1,4 @@
+import { isImagePixelBox, type PlanContentBox } from './geometry'
 import type { ImageSize } from './image-size'
 import { UNCONFIGURED_USER_MESSAGE } from './import-copy'
 import { type ExtractedFloorplan, extractedFloorplanSchema } from './schema'
@@ -84,14 +85,18 @@ export async function extractFloorplanDebug(image: VisionImage): Promise<Floorpl
   )
   let extracted = parseVisionJson(raw)
   if (size && usesWrongPixelGrid(extracted, size)) {
-    raw = await runVisionPass(
-      provider,
-      image,
-      size,
-      traceSystemPrompt(size),
-      `${traceUserPrompt(size, observation)}\n\nYour previous JSON used a ~1000-unit square instead of this ${size.width}×${size.height} pixel grid. Re-trace. x must run 0..${size.width}, y 0..${size.height}. A vertex on the right outer wall is near x=${size.width}, not x=1000.`,
-    )
-    extracted = parseVisionJson(raw)
+    try {
+      const landmarkRaw = await runVisionPass(
+        provider,
+        image,
+        size,
+        landmarkSystemPrompt(size),
+        landmarkUserPrompt(size),
+      )
+      extracted = attachOuterWall(extracted, landmarkRaw, size)
+    } catch {
+      // Keep the first trace; overlay/build-scene still remaps unit1000.
+    }
   }
   return {
     provider,
@@ -102,7 +107,7 @@ export async function extractFloorplanDebug(image: VisionImage): Promise<Floorpl
   }
 }
 
-function usesWrongPixelGrid(extracted: ExtractedFloorplan, size: ImageSize): boolean {
+export function usesWrongPixelGrid(extracted: ExtractedFloorplan, size: ImageSize): boolean {
   const xs = extracted.rooms.flatMap((room) => room.polygon.map((point) => point[0]))
   const ys = extracted.rooms.flatMap((room) => room.polygon.map((point) => point[1]))
   if (xs.length === 0) return false
@@ -110,6 +115,19 @@ function usesWrongPixelGrid(extracted: ExtractedFloorplan, size: ImageSize): boo
   const maxY = Math.max(...ys)
   if (maxX <= 1.5 && maxY <= 1.5) return false
   return maxX < size.width * 0.6
+}
+
+export function attachOuterWall(
+  extracted: ExtractedFloorplan,
+  landmarkRaw: string,
+  size: ImageSize,
+): ExtractedFloorplan {
+  const box = parseOuterWallJson(landmarkRaw, size)
+  if (!box) return extracted
+  return {
+    ...extracted,
+    planBounds: { min: [box.minX, box.minY], max: [box.maxX, box.maxY] },
+  }
 }
 
 function visionModelFor(provider: VisionProvider): string {
@@ -131,6 +149,39 @@ export function parseVisionJson(raw: string): ExtractedFloorplan {
     throw new VisionResponseError(`Vision JSON failed validation: ${result.error.message}`)
   }
   return result.data
+}
+
+export function parseOuterWallJson(raw: string, size: ImageSize): PlanContentBox | null {
+  const text = stripFences(raw)
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return null
+  }
+  if (!parsed || typeof parsed !== 'object') return null
+  const record = parsed as Record<string, unknown>
+  const source = record.outerWall ?? record.planBounds ?? record
+  if (!source || typeof source !== 'object') return null
+  const boxRecord = source as Record<string, unknown>
+  const min = asPair(boxRecord.min)
+  const max = asPair(boxRecord.max)
+  if (!min || !max) return null
+  const box: PlanContentBox = {
+    minX: Math.min(min[0], max[0]),
+    maxX: Math.max(min[0], max[0]),
+    minY: Math.min(min[1], max[1]),
+    maxY: Math.max(min[1], max[1]),
+  }
+  return isImagePixelBox(box, size.width, size.height) ? box : null
+}
+
+function asPair(value: unknown): [number, number] | null {
+  if (!Array.isArray(value) || value.length < 2) return null
+  const x = Number(value[0])
+  const y = Number(value[1])
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null
+  return [x, y]
 }
 
 function pixelRule(size?: ImageSize): string {
@@ -214,6 +265,25 @@ Trace only what is drawn:
 - dimensions: copy printed linear sizes (already converted to metres) with endpoints in pixels.
 - width of doors/windows/openings is metres.
 - confidence 0..1.`
+}
+
+function landmarkSystemPrompt(size: ImageSize): string {
+  return `You locate the drawn building on a floor-plan scan. Return ONLY JSON. Do not list rooms, doors, windows, or furniture.
+
+The image is ${size.width}×${size.height} pixels. Origin TOP-LEFT of the FULL image, including margin. x right, y down.
+
+Schema:
+{ "outerWall": { "min": [x, y], "max": [x, y] } }
+
+Rules:
+- min is the top-left of the OUTER wall, max is the bottom-right, in pixels of this ${size.width}×${size.height} raster.
+- Ignore empty paper margin. Do not use a 0..1000 square. A right-hand outer wall is near x=${size.width} only if the ink is actually there; if the drawing sits in the middle of the page, say so with middle pixels.
+- Include the balcony if it is drawn as part of the building. Exclude a door swing that sticks out into empty page if you can.
+- Do not invent geometry.`
+}
+
+function landmarkUserPrompt(size: ImageSize): string {
+  return `Scan size ${size.width}×${size.height}. Return only the axis-aligned outer-wall rectangle in full-image pixels.`
 }
 
 function traceUserPrompt(size?: ImageSize, observation?: string): string {
