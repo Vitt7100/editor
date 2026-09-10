@@ -1,5 +1,5 @@
 import type { ImageSize } from './image-size'
-import { UNCONFIGURED_ADMIN_LOG, UNCONFIGURED_USER_MESSAGE } from './import-copy'
+import { UNCONFIGURED_USER_MESSAGE } from './import-copy'
 import { type ExtractedFloorplan, extractedFloorplanSchema } from './schema'
 
 export class VisionUnavailableError extends Error {
@@ -26,6 +26,10 @@ export type VisionImage = {
 }
 
 export const UNCONFIGURED_MESSAGE = UNCONFIGURED_USER_MESSAGE
+
+/** Server logs only — never send this string to the browser. */
+export const UNCONFIGURED_ADMIN_LOG =
+  'Set OPENROUTER_API_KEY in .env.local, then restart the editor.'
 
 const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-4.1'
 const DEFAULT_OPENAI_MODEL = 'gpt-4.1'

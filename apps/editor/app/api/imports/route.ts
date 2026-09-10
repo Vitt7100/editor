@@ -4,13 +4,12 @@ import {
   HEIGHT_RANGE_MESSAGE,
   NO_FILE_MESSAGE,
   TOO_LARGE_MESSAGE,
-  UNCONFIGURED_ADMIN_LOG,
   UNCONFIGURED_USER_MESSAGE,
 } from '@/lib/floorplan-import/import-copy'
 import { createImportJob, publicImportJob } from '@/lib/floorplan-import/jobs'
 import { runFloorplanImport } from '@/lib/floorplan-import/run-import'
 import { DEFAULT_WALL_HEIGHT, parseWallHeight } from '@/lib/floorplan-import/schema'
-import { getConfiguredVisionProvider } from '@/lib/floorplan-import/vision'
+import { getConfiguredVisionProvider, UNCONFIGURED_ADMIN_LOG } from '@/lib/floorplan-import/vision'
 import { guardSceneApiRequest, sceneApiJson, sceneApiPreflight } from '@/lib/scene-api-security'
 
 export const dynamic = 'force-dynamic'

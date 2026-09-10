@@ -54,8 +54,7 @@ function clientFileError(file: File): string | null {
 function successSummary(job: ImportJobResponse): string {
   const rooms = job.rooms ?? 0
   const walls = job.walls ?? 0
-  const doors = typeof job.doors === 'number' && job.doors > 0 ? `, ${job.doors} doors` : ''
-  return `Built: ${rooms} rooms, ${walls} walls${doors}.`
+  return `Built: ${rooms} rooms, ${walls} walls.`
 }
 
 export function FloorplanImport({
@@ -265,7 +264,7 @@ export function FloorplanImport({
           />
         </label>
         <label className="text-sm">
-          <span className="mb-1 block text-muted-foreground">Ceiling height</span>
+          <span className="mb-1 block text-muted-foreground">Ceiling height (m)</span>
           <input
             className="w-full rounded-md border border-border bg-background px-3 py-2"
             disabled={waiting}
@@ -276,7 +275,7 @@ export function FloorplanImport({
             type="number"
             value={wallHeight}
           />
-          <span className="mt-1 block text-muted-foreground text-xs">2.0–4.5 m</span>
+          <span className="mt-1 block text-muted-foreground text-xs">2.0–4.5</span>
         </label>
       </div>
 
@@ -297,11 +296,16 @@ export function FloorplanImport({
       {job?.status === 'done' && (
         <div className="mt-3 text-sm">
           <p>{successSummary(job)}</p>
-          {warnings.map((warning) => (
-            <p className="mt-1 text-muted-foreground" key={warning}>
-              {warning}
-            </p>
-          ))}
+          {typeof job.doors === 'number' && job.doors > 0 ? (
+            <p className="mt-1">{job.doors} doors.</p>
+          ) : null}
+          {warnings.length > 0 && (
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">
+              {warnings.map((warning) => (
+                <li key={warning}>{warning}</li>
+              ))}
+            </ul>
+          )}
           {job.editorUrl && (
             <p className="mt-2">
               Opening the scene…{' '}

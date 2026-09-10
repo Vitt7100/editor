@@ -1,10 +1,7 @@
-/** User-facing import copy. Do not put API keys or schema dumps here. */
+/** User-facing import copy. Do not put API keys, env files, or model slugs here. */
 
 export const UNCONFIGURED_USER_MESSAGE =
   'Import isn’t available right now. Ask your admin to enable plan reading, then try again.'
-
-export const UNCONFIGURED_ADMIN_LOG =
-  'Set OPENROUTER_API_KEY in .env.local, then restart the editor.'
 
 export const NO_FILE_MESSAGE = 'Choose a floor-plan image first.'
 

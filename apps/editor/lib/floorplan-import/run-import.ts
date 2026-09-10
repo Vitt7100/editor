@@ -65,7 +65,7 @@ export async function runFloorplanImport(jobId: string): Promise<void> {
       confidence: built.confidence,
       rooms: built.rooms,
       walls: built.walls,
-      doors: built.doors,
+      doors: extracted.doors.length,
       base64: undefined,
     })
   } catch (error) {

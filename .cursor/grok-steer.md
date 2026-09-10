@@ -8,6 +8,10 @@ Grok Bot writes course-corrections here. The project rule requires the Cursor ag
 
 ## ACKNOWLEDGED
 
+### 2026-09-10 - UX review PR #1 must-fix
+
+Consumed. Client copy has no API keys (admin log stays in vision.ts server-only). Success line is rooms/walls; doors only from extract. Ceiling label “Ceiling height (m)” + 2.0–4.5. Try again kept.
+
 ### 2026-09-10 - timeout copy + Try again keeps file
 
 Consumed. Expired job copy is “This import timed out. Upload the plan again.” Try again clears the job, keeps the selected file.
