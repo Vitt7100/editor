@@ -1,8 +1,15 @@
 import type { NextRequest } from 'next/server'
+import {
+  BAD_MIME_MESSAGE,
+  HEIGHT_RANGE_MESSAGE,
+  NO_FILE_MESSAGE,
+  TOO_LARGE_MESSAGE,
+  UNCONFIGURED_USER_MESSAGE,
+} from '@/lib/floorplan-import/import-copy'
 import { createImportJob, publicImportJob } from '@/lib/floorplan-import/jobs'
 import { runFloorplanImport } from '@/lib/floorplan-import/run-import'
-import { DEFAULT_WALL_HEIGHT } from '@/lib/floorplan-import/schema'
-import { getConfiguredVisionProvider } from '@/lib/floorplan-import/vision'
+import { DEFAULT_WALL_HEIGHT, parseWallHeight } from '@/lib/floorplan-import/schema'
+import { getConfiguredVisionProvider, UNCONFIGURED_ADMIN_LOG } from '@/lib/floorplan-import/vision'
 import { guardSceneApiRequest, sceneApiJson, sceneApiPreflight } from '@/lib/scene-api-security'
 
 export const dynamic = 'force-dynamic'
@@ -31,11 +38,12 @@ export async function POST(request: NextRequest) {
   if (guard) return guard
 
   if (!getConfiguredVisionProvider()) {
+    console.error(UNCONFIGURED_ADMIN_LOG)
     return sceneApiJson(
       request,
       {
         error: 'vision_unconfigured',
-        message: 'Set OPENROUTER_API_KEY in .env.local and restart the editor.',
+        message: UNCONFIGURED_USER_MESSAGE,
       },
       { status: 503 },
     )
@@ -47,7 +55,10 @@ export async function POST(request: NextRequest) {
   } catch {
     return sceneApiJson(
       request,
-      { error: 'invalid_request', details: 'expected multipart form data' },
+      {
+        error: 'file_required',
+        message: NO_FILE_MESSAGE,
+      },
       { status: 400 },
     )
   }
@@ -56,14 +67,17 @@ export async function POST(request: NextRequest) {
   if (!(file instanceof File)) {
     return sceneApiJson(
       request,
-      { error: 'invalid_request', details: 'file is required' },
+      { error: 'file_required', message: NO_FILE_MESSAGE },
       { status: 400 },
     )
   }
   if (file.size > MAX_UPLOAD_BYTES) {
     return sceneApiJson(
       request,
-      { error: 'too_large', details: 'Maximum size is 12 MB' },
+      {
+        error: 'too_large',
+        message: TOO_LARGE_MESSAGE,
+      },
       { status: 413 },
     )
   }
@@ -72,13 +86,27 @@ export async function POST(request: NextRequest) {
   if (!ALLOWED_MIME.has(mimeType)) {
     return sceneApiJson(
       request,
-      { error: 'invalid_request', details: 'Upload a JPEG, PNG, WebP, or GIF floor plan' },
+      {
+        error: 'bad_mime',
+        message: BAD_MIME_MESSAGE,
+      },
+      { status: 400 },
+    )
+  }
+
+  const wallHeight = readWallHeight(form.get('wallHeight'))
+  if (wallHeight === null) {
+    return sceneApiJson(
+      request,
+      {
+        error: 'invalid_height',
+        message: HEIGHT_RANGE_MESSAGE,
+      },
       { status: 400 },
     )
   }
 
   const name = readName(form.get('name'), file.name)
-  const wallHeight = readWallHeight(form.get('wallHeight'))
   const base64 = Buffer.from(await file.arrayBuffer()).toString('base64')
   const job = createImportJob({ name, wallHeight, mimeType, base64 })
   void runFloorplanImport(job.id)
@@ -102,9 +130,7 @@ function readName(value: FormDataEntryValue | null, filename: string): string {
   return stem || 'Apartment from plan'
 }
 
-function readWallHeight(value: FormDataEntryValue | null): number {
+function readWallHeight(value: FormDataEntryValue | null): number | null {
   if (typeof value !== 'string' || value.trim() === '') return DEFAULT_WALL_HEIGHT
-  const parsed = Number.parseFloat(value)
-  if (!Number.isFinite(parsed) || parsed < 2 || parsed > 4.5) return DEFAULT_WALL_HEIGHT
-  return parsed
+  return parseWallHeight(value)
 }

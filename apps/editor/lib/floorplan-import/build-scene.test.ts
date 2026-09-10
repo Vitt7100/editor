@@ -1,4 +1,6 @@
 import { expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { buildSceneFromFloorplan } from './build-scene'
 import { polygonArea } from './geometry'
 import type { ExtractedFloorplan } from './schema'
@@ -283,6 +285,33 @@ test('metre coordinates do not stretch the guide to the full image', () => {
   expect(guide?.type).toBe('guide')
   if (guide?.type !== 'guide') return
   expect(guide.scale).toBeCloseTo(0.8, 5)
+})
+
+test('~1000-square extract aligns walls with the full 1920×1280 guide, not the left half', () => {
+  const fixture = JSON.parse(
+    readFileSync(join(import.meta.dir, 'fixtures/unit1000-1920x1280.json'), 'utf8'),
+  ) as ExtractedFloorplan
+  const built = buildSceneFromFloorplan(fixture, {
+    imageSize: { width: 1920, height: 1280 },
+    guide: { url: '/api/scenes/abc/guide', name: 'Plan' },
+  })
+  const guide = Object.values(built.graph.nodes).find((node) => node.type === 'guide')
+  expect(guide?.type).toBe('guide')
+  if (guide?.type !== 'guide') return
+  const zones = Object.values(built.graph.nodes).filter((node) => node.type === 'zone')
+  const xs = zones.flatMap((zone) =>
+    zone.type === 'zone' ? zone.polygon.map((point) => point[0]) : [],
+  )
+  const maxX = Math.max(...xs)
+  const guideHalfWidth = guide.scale * 5
+  // Remapped right wall sits near the right edge of the guide (~0.97).
+  // The old 0..1-only overlay left maxAbs=985 as pixels, ratio ≈ 0.03.
+  expect(maxX / guideHalfWidth).toBeCloseTo(931.2 / 960, 1)
+  expect(built.doors).toBe(1)
+  expect(built.windows).toBe(1)
+  const doorNodes = Object.values(built.graph.nodes).filter((node) => node.type === 'door')
+  expect(doorNodes).toHaveLength(1)
+  expect(doorNodes[0]).toMatchObject({ type: 'door', openingKind: 'door' })
 })
 
 test('parseVisionJson accepts fenced JSON', () => {

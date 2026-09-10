@@ -1,0 +1,307 @@
+{
+  "rooms": [
+    {
+      "name": "Hallway",
+      "kind": "hallway",
+      "polygon": [
+        [
+          575,
+          410
+        ],
+        [
+          655,
+          410
+        ],
+        [
+          655,
+          495
+        ],
+        [
+          785,
+          495
+        ],
+        [
+          785,
+          590
+        ],
+        [
+          655,
+          590
+        ],
+        [
+          655,
+          755
+        ],
+        [
+          575,
+          755
+        ],
+        [
+          575,
+          610
+        ],
+        [
+          490,
+          610
+        ],
+        [
+          490,
+          755
+        ],
+        [
+          295,
+          755
+        ],
+        [
+          295,
+          610
+        ],
+        [
+          490,
+          610
+        ],
+        [
+          490,
+          520
+        ],
+        [
+          575,
+          520
+        ]
+      ],
+      "labeledAreaSqM": 3.9,
+      "roomNumber": "1"
+    },
+    {
+      "name": "Living Room/Kitchen",
+      "kind": "living",
+      "polygon": [
+        [
+          295,
+          90
+        ],
+        [
+          600,
+          90
+        ],
+        [
+          600,
+          210
+        ],
+        [
+          655,
+          210
+        ],
+        [
+          655,
+          410
+        ],
+        [
+          575,
+          410
+        ],
+        [
+          575,
+          520
+        ],
+        [
+          490,
+          520
+        ],
+        [
+          490,
+          610
+        ],
+        [
+          295,
+          610
+        ]
+      ],
+      "labeledAreaSqM": 19.4,
+      "roomNumber": "2"
+    },
+    {
+      "name": "Bedroom",
+      "kind": "bedroom",
+      "polygon": [
+        [
+          655,
+          210
+        ],
+        [
+          755,
+          210
+        ],
+        [
+          755,
+          160
+        ],
+        [
+          985,
+          160
+        ],
+        [
+          985,
+          390
+        ],
+        [
+          795,
+          390
+        ],
+        [
+          795,
+          495
+        ],
+        [
+          785,
+          495
+        ],
+        [
+          655,
+          495
+        ]
+      ],
+      "labeledAreaSqM": 12.3,
+      "roomNumber": "3"
+    },
+    {
+      "name": "Bathroom",
+      "kind": "bathroom",
+      "polygon": [
+        [
+          785,
+          495
+        ],
+        [
+          795,
+          495
+        ],
+        [
+          795,
+          590
+        ],
+        [
+          985,
+          590
+        ],
+        [
+          985,
+          755
+        ],
+        [
+          785,
+          755
+        ],
+        [
+          785,
+          590
+        ]
+      ],
+      "labeledAreaSqM": 3.8,
+      "roomNumber": "4"
+    },
+    {
+      "name": "Balcony",
+      "kind": "balcony",
+      "polygon": [
+        [
+          435,
+          10
+        ],
+        [
+          600,
+          10
+        ],
+        [
+          600,
+          90
+        ],
+        [
+          435,
+          90
+        ]
+      ],
+      "labeledAreaSqM": 0.6,
+      "roomNumber": "5"
+    }
+  ],
+  "doors": [
+    {
+      "at": [
+        517,
+        90
+      ],
+      "width": 0.9,
+      "openingKind": "door",
+      "hingesSide": "right",
+      "swingDirection": "inward"
+    },
+    {
+      "at": [
+        615,
+        410
+      ],
+      "width": 0.8,
+      "openingKind": "door",
+      "hingesSide": "left",
+      "swingDirection": "outward"
+    },
+    {
+      "at": [
+        720,
+        495
+      ],
+      "width": 0.8,
+      "openingKind": "door",
+      "hingesSide": "right",
+      "swingDirection": "inward"
+    },
+    {
+      "at": [
+        785,
+        542
+      ],
+      "width": 0.8,
+      "openingKind": "door",
+      "hingesSide": "left",
+      "swingDirection": "inward"
+    },
+    {
+      "at": [
+        885,
+        755
+      ],
+      "width": 0.8,
+      "openingKind": "door",
+      "hingesSide": "right",
+      "swingDirection": "inward"
+    }
+  ],
+  "openings": [],
+  "windows": [
+    {
+      "at": [
+        295,
+        400
+      ],
+      "width": 1.5
+    },
+    {
+      "at": [
+        870,
+        160
+      ],
+      "width": 1.8
+    },
+    {
+      "at": [
+        517,
+        10
+      ],
+      "width": 1.2
+    }
+  ],
+  "dimensions": [],
+  "confidence": 0.92,
+  "notes": "Floor plan traced with 5 rooms. Room 2 is a combined living/kitchen space. Room 3 is a bedroom with labeled sleeping area. Rooms 1 and 4 appear to be hallway and bathroom respectively. Room 5 is a small balcony. All coordinates are in pixels on the 1920×1280 image. Entry door from exterior at bottom left, balcony door at top."
+}

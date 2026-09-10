@@ -1,9 +1,9 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 import { parseImageSize } from '../lib/floorplan-import/image-size'
-import { extractFloorplanDebug } from '../lib/floorplan-import/vision'
 import type { ExtractedFloorplan } from '../lib/floorplan-import/schema'
-import { extractMaxAbs, overlayPoint } from './overlay-coords'
+import { extractFloorplanDebug } from '../lib/floorplan-import/vision'
+import { extractMaxAbs, overlayExtracted } from './overlay-coords'
 
 function loadEnv(filePath: string) {
   const text = readFileSync(filePath, 'utf8')
@@ -36,28 +36,28 @@ function overlaySvg(
   extracted: ExtractedFloorplan,
   imageSize: { width: number; height: number },
 ): string {
-  const maxAbs = extractMaxAbs(extracted)
-  const px = (x: number, y: number): [number, number] => overlayPoint(x, y, imageSize, maxAbs)
-  const rooms = extracted.rooms
+  const plan = overlayExtracted(extracted, imageSize)
+  const px = (x: number, y: number): [number, number] => [x, y]
+  const rooms = plan.rooms
     .map((room, index) => {
       const points = room.polygon.map(([x, y]) => px(x, y).join(',')).join(' ')
       const label = px(room.polygon[0]?.[0] ?? 0, room.polygon[0]?.[1] ?? 0)
       return `<polygon points="${points}" fill="rgba(37,99,235,0.18)" stroke="#2563eb" stroke-width="3" /><text x="${label[0]}" y="${label[1]}" fill="#1d4ed8" font-size="28" font-family="sans-serif">${index + 1}:${escapeXml(room.name)}</text>`
     })
     .join('')
-  const doors = extracted.doors
+  const doors = plan.doors
     .map((door) => {
       const [x, y] = px(door.at[0], door.at[1])
       return `<circle cx="${x}" cy="${y}" r="14" fill="#16a34a" stroke="#14532d" stroke-width="3" />`
     })
     .join('')
-  const openings = (extracted.openings ?? [])
+  const openings = (plan.openings ?? [])
     .map((opening) => {
       const [x, y] = px(opening.at[0], opening.at[1])
       return `<circle cx="${x}" cy="${y}" r="14" fill="#eab308" stroke="#854d0e" stroke-width="3" />`
     })
     .join('')
-  const windows = extracted.windows
+  const windows = plan.windows
     .map((window) => {
       const [x, y] = px(window.at[0], window.at[1])
       return `<rect x="${x - 16}" y="${y - 16}" width="32" height="32" fill="#7c3aed" stroke="#4c1d95" stroke-width="3" />`
@@ -130,6 +130,7 @@ console.log(
     openings: debug.extracted.openings?.length ?? 0,
     windows: debug.extracted.windows.length,
     maxAbs: Number(extractMaxAbs(debug.extracted).toFixed(4)),
+    overlayMaxAbs: Number(extractMaxAbs(overlayExtracted(debug.extracted, imageSize)).toFixed(4)),
     outDir,
   }),
 )

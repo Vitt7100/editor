@@ -1,0 +1,43 @@
+{
+  "notes": "Fixture mimicking gpt-4.1 ~1000-square extract on failing-001.jpg (1920×1280). x∈[295,985], y∈[10,755], maxAbs≈985. Not 0..1 and not image pixels.",
+  "confidence": 0.62,
+  "rooms": [
+    {
+      "name": "ГОСТИНАЯ",
+      "kind": "living",
+      "polygon": [
+        [295, 10],
+        [985, 10],
+        [985, 400],
+        [295, 400]
+      ],
+      "labeledAreaSqM": 18.2
+    },
+    {
+      "name": "КОРИДОР",
+      "kind": "hallway",
+      "polygon": [
+        [295, 400],
+        [500, 400],
+        [500, 755],
+        [295, 755]
+      ],
+      "labeledAreaSqM": 4.1
+    }
+  ],
+  "doors": [
+    {
+      "at": [400, 400],
+      "width": 0.9,
+      "openingKind": "door"
+    }
+  ],
+  "openings": [],
+  "windows": [
+    {
+      "at": [640, 10],
+      "width": 1.4
+    }
+  ],
+  "dimensions": []
+}

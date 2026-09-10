@@ -1,8 +1,19 @@
 'use client'
 
+import { Loader2 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { DEFAULT_WALL_HEIGHT } from '@/lib/floorplan-import/schema'
+import {
+  BAD_MIME_MESSAGE,
+  HEIGHT_RANGE_MESSAGE,
+  NETWORK_LOST_MESSAGE,
+  NO_FILE_MESSAGE,
+  STAGE_LABELS,
+  TOO_LARGE_MESSAGE,
+  UNCONFIGURED_USER_MESSAGE,
+  userMessageForImportError,
+} from '@/lib/floorplan-import/import-copy'
+import { DEFAULT_WALL_HEIGHT, parseWallHeight } from '@/lib/floorplan-import/schema'
 import { cn } from '@/lib/utils'
 
 type VisionStatus = {
@@ -26,14 +37,24 @@ type ImportJobResponse = {
   message?: string
 }
 
-const STAGE_LABELS: Record<string, string> = {
-  queued: 'Queued…',
-  reading: 'Reading the drawing…',
-  'reading-drawing': 'Reading labels and dimensions…',
-  'building-scene': 'Building walls…',
-  saving: 'Saving the scene…',
-  done: 'Done',
-  failed: 'Failed',
+const MAX_UPLOAD_BYTES = 12 * 1024 * 1024
+const ALLOWED_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif'])
+
+function fileLooksLikeImage(file: File): boolean {
+  if (ALLOWED_TYPES.has(file.type)) return true
+  return /\.(jpe?g|png|webp|gif)$/i.test(file.name)
+}
+
+function clientFileError(file: File): string | null {
+  if (file.size > MAX_UPLOAD_BYTES) return TOO_LARGE_MESSAGE
+  if (!fileLooksLikeImage(file)) return BAD_MIME_MESSAGE
+  return null
+}
+
+function successSummary(job: ImportJobResponse): string {
+  const rooms = job.rooms ?? 0
+  const walls = job.walls ?? 0
+  return `Built: ${rooms} rooms, ${walls} walls.`
 }
 
 export function FloorplanImport({
@@ -83,8 +104,14 @@ export function FloorplanImport({
   const chooseFile = useCallback(
     (next: File | undefined) => {
       if (!next) return
-      setError(null)
+      const problem = clientFileError(next)
       setJob(null)
+      if (problem) {
+        setError(problem)
+        setFile(null)
+        return
+      }
+      setError(null)
       setFile(next)
       if (!name) setName(next.name.replace(/\.[^.]+$/, ''))
     },
@@ -93,7 +120,15 @@ export function FloorplanImport({
 
   const startImport = useCallback(async () => {
     if (!file) {
-      setError('Choose a floor-plan image first.')
+      setError(NO_FILE_MESSAGE)
+      return
+    }
+    if (vision && !vision.visionConfigured) {
+      setError(UNCONFIGURED_USER_MESSAGE)
+      return
+    }
+    if (parseWallHeight(wallHeight) === null) {
+      setError(HEIGHT_RANGE_MESSAGE)
       return
     }
     setBusy(true)
@@ -106,39 +141,53 @@ export function FloorplanImport({
       const response = await fetch('/api/imports', { method: 'POST', body })
       const payload = (await response.json()) as ImportJobResponse
       if (!response.ok) {
-        setError(payload.message ?? payload.error ?? `Import failed (${response.status})`)
+        setError(userMessageForImportError(payload.error, payload.message))
         return
       }
       setJob(payload)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Import failed')
+    } catch {
+      setError(NETWORK_LOST_MESSAGE)
     } finally {
       setBusy(false)
     }
-  }, [file, name, wallHeight])
+  }, [file, name, wallHeight, vision])
+
+  const tryAgain = useCallback(() => {
+    setJob(null)
+    setError(null)
+    void startImport()
+  }, [startImport])
 
   useEffect(() => {
     if (!job || job.status === 'done' || job.status === 'error') return
     const timer = window.setInterval(async () => {
-      const response = await fetch(`/api/imports/${job.id}`)
-      const payload = (await response.json()) as ImportJobResponse
-      if (!response.ok) {
-        setError(payload.error ?? 'Lost the import job')
+      try {
+        const response = await fetch(`/api/imports/${job.id}`)
+        const payload = (await response.json()) as ImportJobResponse
+        if (!response.ok) {
+          setError(userMessageForImportError(payload.error, payload.message))
+          setJob(null)
+          return
+        }
+        setJob(payload)
+        if (payload.status === 'done' && payload.editorUrl) {
+          router.push(payload.editorUrl)
+        }
+        if (payload.status === 'error') {
+          setError(payload.error ?? 'Import failed. Please try again.')
+        }
+      } catch {
+        setError(NETWORK_LOST_MESSAGE)
         setJob(null)
-        return
-      }
-      setJob(payload)
-      if (payload.status === 'done' && payload.editorUrl) {
-        router.push(payload.editorUrl)
-      }
-      if (payload.status === 'error') {
-        setError(payload.error ?? 'Import failed')
       }
     }, 1000)
     return () => window.clearInterval(timer)
   }, [job, router])
 
   const waiting = Boolean(job && job.status !== 'done' && job.status !== 'error')
+  const stageLabel = STAGE_LABELS[job?.stage ?? ''] ?? job?.stage
+  const visionMissing = vision !== null && !vision.visionConfigured
+  const warnings = (job?.warnings ?? []).filter(Boolean)
 
   return (
     <div
@@ -150,15 +199,14 @@ export function FloorplanImport({
       <div className="mb-4">
         <h2 className="font-semibold text-lg">Upload a floor plan</h2>
         <p className="mt-1 text-muted-foreground text-sm">
-          JPEG or PNG of an apartment drawing. We build a 3D apartment with the
-          drawing on the floor.
+          JPEG, PNG, WebP, or GIF of an apartment drawing. We build a 3D scene with the plan on the
+          floor.
         </p>
       </div>
 
-      {vision && !vision.visionConfigured && (
+      {visionMissing && (
         <p className="mb-4 rounded-lg border border-amber-500/50 bg-amber-100 px-3 py-2 text-amber-950 text-sm">
-          Add <code className="font-mono">OPENROUTER_API_KEY</code> to{' '}
-          <code className="font-mono">.env.local</code> and restart the editor.
+          {UNCONFIGURED_USER_MESSAGE}
         </p>
       )}
 
@@ -168,7 +216,9 @@ export function FloorplanImport({
           dragOver
             ? 'border-foreground bg-accent/40'
             : 'border-border/70 bg-accent/10 hover:bg-accent/20',
+          waiting && 'pointer-events-none opacity-70',
         )}
+        disabled={waiting}
         onClick={() => inputRef.current?.click()}
         onDragOver={(event) => {
           event.preventDefault()
@@ -208,6 +258,7 @@ export function FloorplanImport({
           <span className="mb-1 block text-muted-foreground">Scene name</span>
           <input
             className="w-full rounded-md border border-border bg-background px-3 py-2"
+            disabled={waiting}
             onChange={(event) => setName(event.target.value)}
             value={name}
           />
@@ -216,6 +267,7 @@ export function FloorplanImport({
           <span className="mb-1 block text-muted-foreground">Ceiling height (m)</span>
           <input
             className="w-full rounded-md border border-border bg-background px-3 py-2"
+            disabled={waiting}
             max={4.5}
             min={2}
             onChange={(event) => setWallHeight(event.target.value)}
@@ -223,36 +275,70 @@ export function FloorplanImport({
             type="number"
             value={wallHeight}
           />
+          <span className="mt-1 block text-muted-foreground text-xs">2.0–4.5</span>
         </label>
       </div>
 
-      {error && <p className="mt-3 text-destructive text-sm">{error}</p>}
-      {waiting && (
-        <p className="mt-3 text-muted-foreground text-sm">
-          {STAGE_LABELS[job?.stage ?? ''] ?? job?.stage}
+      {error && (
+        <p className="mt-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-destructive text-sm">
+          {error}
         </p>
       )}
-      {job?.status === 'done' && job.editorUrl && (
-        <p className="mt-3 text-sm">
-          Scene ready.{' '}
-          <a className="underline" href={job.editorUrl}>
-            Open it
-          </a>
-        </p>
+      {waiting && (
+        <div className="mt-3 flex items-start gap-2 text-muted-foreground text-sm">
+          <Loader2 className="mt-0.5 size-4 shrink-0 animate-spin" />
+          <div>
+            <p>{stageLabel}</p>
+            <p>Usually under a minute.</p>
+          </div>
+        </div>
+      )}
+      {job?.status === 'done' && (
+        <div className="mt-3 text-sm">
+          <p>{successSummary(job)}</p>
+          {typeof job.doors === 'number' && job.doors > 0 ? (
+            <p className="mt-1">{job.doors} doors.</p>
+          ) : null}
+          {warnings.length > 0 && (
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">
+              {warnings.map((warning) => (
+                <li key={warning}>{warning}</li>
+              ))}
+            </ul>
+          )}
+          {job.editorUrl && (
+            <p className="mt-2">
+              Opening the scene…{' '}
+              <a className="underline" href={job.editorUrl}>
+                Open it
+              </a>
+            </p>
+          )}
+        </div>
       )}
 
       <div className="mt-5 flex items-center gap-3">
         <button
           className="rounded-md border border-border bg-accent px-4 py-2 font-medium text-sm hover:bg-accent/80 disabled:opacity-50"
-          disabled={busy || waiting || !file}
+          disabled={busy || waiting || !file || visionMissing}
           onClick={() => void startImport()}
           type="button"
         >
           {waiting ? 'Building 3D…' : busy ? 'Uploading…' : 'Build 3D'}
         </button>
-        {file && (
+        {error && file && !waiting && (
           <button
             className="text-muted-foreground text-sm underline"
+            onClick={() => tryAgain()}
+            type="button"
+          >
+            Try again
+          </button>
+        )}
+        {file && (
+          <button
+            className="text-muted-foreground text-sm underline disabled:opacity-50"
+            disabled={waiting}
             onClick={() => {
               setFile(null)
               setJob(null)

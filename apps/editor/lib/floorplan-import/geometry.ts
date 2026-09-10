@@ -1,4 +1,4 @@
-import { SNAP_GRID, type Vec2 } from './schema'
+import { type ExtractedFloorplan, SNAP_GRID, type Vec2 } from './schema'
 
 export function snapCoord(value: number, grid = SNAP_GRID): number {
   return Math.round(value / grid) * grid
@@ -144,7 +144,26 @@ export function maxAbsCoord(points: Vec2[]): number {
   return max
 }
 
-export type ImageCoordinateSpace = 'metres' | 'pixels' | 'normalized'
+export type ImageCoordinateSpace = 'metres' | 'pixels' | 'normalized' | 'unit1000'
+
+/** Vision models often emit a 0..1000 square instead of image pixels. */
+export const UNIT1000_CANVAS = 1000
+
+export function extractPoints(extracted: ExtractedFloorplan): Vec2[] {
+  const points: Vec2[] = []
+  for (const room of extracted.rooms) points.push(...room.polygon)
+  for (const door of extracted.doors) points.push(door.at)
+  for (const opening of extracted.openings ?? []) points.push(opening.at)
+  for (const window of extracted.windows) points.push(window.at)
+  for (const dimension of extracted.dimensions ?? []) {
+    points.push(dimension.start, dimension.end)
+  }
+  return points
+}
+
+export function extractMaxAbs(extracted: ExtractedFloorplan): number {
+  return maxAbsCoord(extractPoints(extracted))
+}
 
 export function detectImageCoordinateSpace(
   points: Vec2[],
@@ -152,13 +171,17 @@ export function detectImageCoordinateSpace(
   imageHeight?: number,
 ): ImageCoordinateSpace {
   const maxAbs = maxAbsCoord(points)
-  if (!imageWidth || !imageHeight) return 'metres'
   if (maxAbs <= 1.5) return 'normalized'
+  if (!imageWidth || !imageHeight) return maxAbs < 80 ? 'metres' : 'pixels'
   // Apartment-scale metres (typically < 80 m) must not be treated as pixels of a
   // 1000+ px scan — that leaves a tiny wall cluster floating on the full overlay.
   const minSide = Math.min(imageWidth, imageHeight)
+  const maxSide = Math.max(imageWidth, imageHeight)
   if (maxAbs < 80 && maxAbs < minSide * 0.08) return 'metres'
-  if (maxAbs <= Math.max(imageWidth, imageHeight) * 1.2) return 'pixels'
+  // ~1000-square on a larger raster (gpt-4.1 / Claude default). A 1024px scan
+  // with maxAbs≈985 is already pixels — only remap when the image is clearly bigger.
+  if (maxAbs >= 700 && maxAbs <= 1100 && maxAbs < maxSide * 0.6) return 'unit1000'
+  if (maxAbs <= maxSide * 1.2) return 'pixels'
   return 'metres'
 }
 
@@ -172,7 +195,72 @@ export function toImagePixels(
   if (space === 'normalized') {
     return [point[0] * imageWidth, point[1] * imageHeight]
   }
+  if (space === 'unit1000') {
+    return [(point[0] / UNIT1000_CANVAS) * imageWidth, (point[1] / UNIT1000_CANVAS) * imageHeight]
+  }
   return point
+}
+
+export type NormalizedFloorplan = {
+  extracted: ExtractedFloorplan
+  space: ImageCoordinateSpace
+  maxAbs: number
+}
+
+/**
+ * Lift vision coordinates onto the image W×H pixel grid.
+ * Identity for metres and for coordinates that are already pixels.
+ */
+export function normalizeFloorplanCoords(
+  extracted: ExtractedFloorplan,
+  imageSize: { width: number; height: number },
+): NormalizedFloorplan {
+  const points = extractPoints(extracted)
+  const maxAbs = maxAbsCoord(points)
+  const space = detectImageCoordinateSpace(points, imageSize.width, imageSize.height)
+  if (space === 'metres' || space === 'pixels') {
+    return { extracted, space, maxAbs }
+  }
+  const mapPoint = (point: Vec2): Vec2 =>
+    toImagePixels(point, imageSize.width, imageSize.height, space)
+  return {
+    space,
+    maxAbs,
+    extracted: mapExtracted(extracted, mapPoint),
+  }
+}
+
+function mapExtracted(
+  extracted: ExtractedFloorplan,
+  mapPoint: (point: Vec2) => Vec2,
+): ExtractedFloorplan {
+  return {
+    ...extracted,
+    rooms: extracted.rooms.map((room) => ({
+      ...room,
+      polygon: room.polygon.map(mapPoint),
+    })),
+    doors: extracted.doors.map((door) => ({ ...door, at: mapPoint(door.at) })),
+    openings: (extracted.openings ?? []).map((opening) => ({
+      ...opening,
+      at: mapPoint(opening.at),
+    })),
+    windows: extracted.windows.map((window) => ({
+      ...window,
+      at: mapPoint(window.at),
+    })),
+    dimensions: (extracted.dimensions ?? []).map((dimension) => ({
+      ...dimension,
+      start: mapPoint(dimension.start),
+      end: mapPoint(dimension.end),
+    })),
+    planBounds: extracted.planBounds
+      ? {
+          min: mapPoint(extracted.planBounds.min),
+          max: mapPoint(extracted.planBounds.max),
+        }
+      : extracted.planBounds,
+  }
 }
 
 /** Collapse nearby vertices so shared room corners become identical. */

@@ -1,4 +1,12 @@
+import {
+  detectImageCoordinateSpace,
+  extractMaxAbs,
+  normalizeFloorplanCoords,
+  toImagePixels,
+} from '../lib/floorplan-import/geometry'
 import type { ExtractedFloorplan } from '../lib/floorplan-import/schema'
+
+export { extractMaxAbs, normalizeFloorplanCoords }
 
 export function overlayPoint(
   x: number,
@@ -6,16 +14,20 @@ export function overlayPoint(
   imageSize: { width: number; height: number },
   maxAbs: number,
 ): [number, number] {
-  if (maxAbs <= 1.5) return [x * imageSize.width, y * imageSize.height]
-  return [x, y]
+  const space = detectImageCoordinateSpace(
+    [
+      [maxAbs, 0],
+      [0, maxAbs],
+    ],
+    imageSize.width,
+    imageSize.height,
+  )
+  return toImagePixels([x, y], imageSize.width, imageSize.height, space)
 }
 
-export function extractMaxAbs(extracted: ExtractedFloorplan): number {
-  let max = 0
-  for (const room of extracted.rooms) {
-    for (const [x, y] of room.polygon) {
-      max = Math.max(max, Math.abs(x), Math.abs(y))
-    }
-  }
-  return max
+export function overlayExtracted(
+  extracted: ExtractedFloorplan,
+  imageSize: { width: number; height: number },
+): ExtractedFloorplan {
+  return normalizeFloorplanCoords(extracted, imageSize).extracted
 }
