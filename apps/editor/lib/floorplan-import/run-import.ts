@@ -3,7 +3,7 @@ import { getSceneOperations } from '@/lib/scene-store-server'
 import { buildSceneFromFloorplan } from './build-scene'
 import { writeGuideImage } from './guide-store'
 import { parseImageSize } from './image-size'
-import { NETWORK_LOST_MESSAGE } from './import-copy'
+import { IMPORT_TIMEOUT_MESSAGE } from './import-copy'
 import { BAD_IMAGE_MESSAGE, formatImportError } from './import-errors'
 import { updateImportJob } from './jobs'
 import { extractFloorplanFromImage } from './vision'
@@ -11,7 +11,7 @@ import { extractFloorplanFromImage } from './vision'
 export async function runFloorplanImport(jobId: string): Promise<void> {
   const current = updateImportJob(jobId, { status: 'running', stage: 'reading' })
   if (!current?.base64) {
-    updateImportJob(jobId, { status: 'error', stage: 'failed', error: NETWORK_LOST_MESSAGE })
+    updateImportJob(jobId, { status: 'error', stage: 'failed', error: IMPORT_TIMEOUT_MESSAGE })
     return
   }
 

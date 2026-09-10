@@ -18,6 +18,8 @@ export const BAD_IMAGE_MESSAGE =
 
 export const NETWORK_LOST_MESSAGE = 'We lost connection to this import. Please try again.'
 
+export const IMPORT_TIMEOUT_MESSAGE = 'This import timed out. Upload the plan again.'
+
 export const VISION_FAIL_MESSAGE =
   'We couldn’t read this drawing. Use a clearer top-down plan, or try again in a minute.'
 
@@ -39,7 +41,7 @@ export const IMPORT_ERROR_COPY: Record<string, string> = {
   file_required: NO_FILE_MESSAGE,
   bad_mime: BAD_MIME_MESSAGE,
   invalid_height: HEIGHT_RANGE_MESSAGE,
-  not_found: NETWORK_LOST_MESSAGE,
+  not_found: IMPORT_TIMEOUT_MESSAGE,
 }
 
 export function userMessageForImportError(error?: string, message?: string): string {

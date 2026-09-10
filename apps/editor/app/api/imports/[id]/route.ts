@@ -1,5 +1,5 @@
 import type { NextRequest } from 'next/server'
-import { NETWORK_LOST_MESSAGE } from '@/lib/floorplan-import/import-copy'
+import { IMPORT_TIMEOUT_MESSAGE } from '@/lib/floorplan-import/import-copy'
 import { getImportJob, publicImportJob } from '@/lib/floorplan-import/jobs'
 import { guardSceneApiRequest, sceneApiJson, sceneApiPreflight } from '@/lib/scene-api-security'
 
@@ -20,7 +20,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
   if (!job) {
     return sceneApiJson(
       request,
-      { error: 'not_found', message: NETWORK_LOST_MESSAGE },
+      { error: 'not_found', message: IMPORT_TIMEOUT_MESSAGE },
       { status: 404 },
     )
   }

@@ -8,6 +8,10 @@ Grok Bot writes course-corrections here. The project rule requires the Cursor ag
 
 ## ACKNOWLEDGED
 
+### 2026-09-10 - timeout copy + Try again keeps file
+
+Consumed. Expired job copy is “This import timed out. Upload the plan again.” Try again clears the job, keeps the selected file.
+
 ### 2026-09-10 - import UX copy (no keys in UI)
 
 Consumed from Grok Bot chat. User-facing unconfigured copy has no API key. Height 2.0–4.5 validated before submit (API rejects, no silent clamp). Spinner + STAGE_LABELS. Doors counted only when > 0.

@@ -10,6 +10,10 @@ test('API error codes map to user strings, not invalid_request', () => {
   expect(userMessageForImportError('vision_unconfigured')).toContain('Ask your admin')
   expect(userMessageForImportError('vision_unconfigured')).not.toContain('OPENROUTER')
   expect(userMessageForImportError('invalid_request')).toBe('Import failed. Please try again.')
+  expect(userMessageForImportError('not_found')).toBe(
+    'This import timed out. Upload the plan again.',
+  )
+  expect(userMessageForImportError('not_found')).not.toContain('expired')
 })
 
 test('vision failures never surface schema dumps', () => {

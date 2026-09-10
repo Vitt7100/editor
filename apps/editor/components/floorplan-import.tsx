@@ -153,6 +153,12 @@ export function FloorplanImport({
     }
   }, [file, name, wallHeight, vision])
 
+  const tryAgain = useCallback(() => {
+    setJob(null)
+    setError(null)
+    void startImport()
+  }, [startImport])
+
   useEffect(() => {
     if (!job || job.status === 'done' || job.status === 'error') return
     const timer = window.setInterval(async () => {
@@ -316,6 +322,15 @@ export function FloorplanImport({
         >
           {waiting ? 'Building 3D…' : busy ? 'Uploading…' : 'Build 3D'}
         </button>
+        {error && file && !waiting && (
+          <button
+            className="text-muted-foreground text-sm underline"
+            onClick={() => tryAgain()}
+            type="button"
+          >
+            Try again
+          </button>
+        )}
         {file && (
           <button
             className="text-muted-foreground text-sm underline disabled:opacity-50"
