@@ -65,6 +65,19 @@ export type ExtractedDimension = z.infer<typeof extractedDimensionSchema>
 export type Vec2 = z.infer<typeof vec2Schema>
 
 export const DEFAULT_WALL_HEIGHT = 2.7
+export const MIN_WALL_HEIGHT = 2
+export const MAX_WALL_HEIGHT = 4.5
+
+/** Returns null when missing or outside 2.0–4.5. Callers must not silently clamp. */
+export function parseWallHeight(value: unknown): number | null {
+  if (value === null || value === undefined) return null
+  const text = typeof value === 'number' ? String(value) : String(value).trim()
+  if (text === '') return null
+  const parsed = Number.parseFloat(text)
+  if (!Number.isFinite(parsed) || parsed < MIN_WALL_HEIGHT || parsed > MAX_WALL_HEIGHT) return null
+  return parsed
+}
+
 export const EXTERIOR_WALL_THICKNESS = 0.3
 export const INTERIOR_WALL_THICKNESS = 0.12
 export const BALCONY_WALL_THICKNESS = 0.08

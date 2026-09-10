@@ -1,11 +1,9 @@
 import type { ImageSize } from './image-size'
-import {
-  type ExtractedFloorplan,
-  extractedFloorplanSchema,
-} from './schema'
+import { UNCONFIGURED_ADMIN_LOG, UNCONFIGURED_USER_MESSAGE } from './import-copy'
+import { type ExtractedFloorplan, extractedFloorplanSchema } from './schema'
 
 export class VisionUnavailableError extends Error {
-  constructor(message = 'No vision API key configured') {
+  constructor(message = UNCONFIGURED_USER_MESSAGE) {
     super(message)
     this.name = 'VisionUnavailableError'
   }
@@ -27,7 +25,7 @@ export type VisionImage = {
   height?: number
 }
 
-const UNCONFIGURED_MESSAGE = 'Set OPENROUTER_API_KEY in .env.local, then restart the editor.'
+export const UNCONFIGURED_MESSAGE = UNCONFIGURED_USER_MESSAGE
 
 const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-4.1'
 const DEFAULT_OPENAI_MODEL = 'gpt-4.1'
@@ -55,10 +53,12 @@ export async function extractFloorplanFromImage(image: VisionImage): Promise<Ext
 export async function extractFloorplanDebug(image: VisionImage): Promise<FloorplanExtractDebug> {
   const provider = getConfiguredVisionProvider()
   if (!provider) {
+    console.error(UNCONFIGURED_ADMIN_LOG)
     throw new VisionUnavailableError(UNCONFIGURED_MESSAGE)
   }
 
-  const size = image.width && image.height ? { width: image.width, height: image.height } : undefined
+  const size =
+    image.width && image.height ? { width: image.width, height: image.height } : undefined
   let observation = '{}'
   try {
     observation = await runVisionPass(
@@ -98,10 +98,7 @@ export async function extractFloorplanDebug(image: VisionImage): Promise<Floorpl
   }
 }
 
-function usesWrongPixelGrid(
-  extracted: ExtractedFloorplan,
-  size: ImageSize,
-): boolean {
+function usesWrongPixelGrid(extracted: ExtractedFloorplan, size: ImageSize): boolean {
   const xs = extracted.rooms.flatMap((room) => room.polygon.map((point) => point[0]))
   const ys = extracted.rooms.flatMap((room) => room.polygon.map((point) => point[1]))
   if (xs.length === 0) return false

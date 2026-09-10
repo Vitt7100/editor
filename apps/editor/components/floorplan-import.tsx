@@ -1,8 +1,19 @@
 'use client'
 
+import { Loader2 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { DEFAULT_WALL_HEIGHT } from '@/lib/floorplan-import/schema'
+import {
+  BAD_MIME_MESSAGE,
+  HEIGHT_RANGE_MESSAGE,
+  NETWORK_LOST_MESSAGE,
+  NO_FILE_MESSAGE,
+  STAGE_LABELS,
+  TOO_LARGE_MESSAGE,
+  UNCONFIGURED_USER_MESSAGE,
+  userMessageForImportError,
+} from '@/lib/floorplan-import/import-copy'
+import { DEFAULT_WALL_HEIGHT, parseWallHeight } from '@/lib/floorplan-import/schema'
 import { cn } from '@/lib/utils'
 
 type VisionStatus = {
@@ -29,29 +40,22 @@ type ImportJobResponse = {
 const MAX_UPLOAD_BYTES = 12 * 1024 * 1024
 const ALLOWED_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif'])
 
-const STAGE_PROGRESS: Record<string, { label: string; percent: number }> = {
-  queued: { label: 'Queued…', percent: 8 },
-  reading: { label: 'Opening the drawing…', percent: 18 },
-  'reading-drawing': { label: 'Reading labels and walls…', percent: 48 },
-  'building-scene': { label: 'Building walls…', percent: 78 },
-  saving: { label: 'Saving the scene…', percent: 92 },
-  done: { label: 'Done', percent: 100 },
-  failed: { label: 'Failed', percent: 100 },
-}
-
 function fileLooksLikeImage(file: File): boolean {
   if (ALLOWED_TYPES.has(file.type)) return true
   return /\.(jpe?g|png|webp|gif)$/i.test(file.name)
 }
 
 function clientFileError(file: File): string | null {
-  if (file.size > MAX_UPLOAD_BYTES) {
-    return 'That image is over 12 MB. Export a smaller JPEG or PNG and try again.'
-  }
-  if (!fileLooksLikeImage(file)) {
-    return 'Upload a JPEG or PNG of the floor-plan drawing.'
-  }
+  if (file.size > MAX_UPLOAD_BYTES) return TOO_LARGE_MESSAGE
+  if (!fileLooksLikeImage(file)) return BAD_MIME_MESSAGE
   return null
+}
+
+function successSummary(job: ImportJobResponse): string {
+  const rooms = job.rooms ?? 0
+  const walls = job.walls ?? 0
+  const doors = typeof job.doors === 'number' && job.doors > 0 ? `, ${job.doors} doors` : ''
+  return `Built: ${rooms} rooms, ${walls} walls${doors}.`
 }
 
 export function FloorplanImport({
@@ -117,13 +121,15 @@ export function FloorplanImport({
 
   const startImport = useCallback(async () => {
     if (!file) {
-      setError('Choose a floor-plan image first.')
+      setError(NO_FILE_MESSAGE)
       return
     }
     if (vision && !vision.visionConfigured) {
-      setError(
-        'Set OPENROUTER_API_KEY in .env.local and restart the editor. Live vision is not available until that key is present.',
-      )
+      setError(UNCONFIGURED_USER_MESSAGE)
+      return
+    }
+    if (parseWallHeight(wallHeight) === null) {
+      setError(HEIGHT_RANGE_MESSAGE)
       return
     }
     setBusy(true)
@@ -136,12 +142,12 @@ export function FloorplanImport({
       const response = await fetch('/api/imports', { method: 'POST', body })
       const payload = (await response.json()) as ImportJobResponse
       if (!response.ok) {
-        setError(payload.message ?? payload.error ?? `Import failed (${response.status})`)
+        setError(userMessageForImportError(payload.error, payload.message))
         return
       }
       setJob(payload)
     } catch {
-      setError('Could not reach the import API. Is the editor running?')
+      setError(NETWORK_LOST_MESSAGE)
     } finally {
       setBusy(false)
     }
@@ -154,12 +160,7 @@ export function FloorplanImport({
         const response = await fetch(`/api/imports/${job.id}`)
         const payload = (await response.json()) as ImportJobResponse
         if (!response.ok) {
-          setError(
-            payload.message ??
-              (payload.error === 'not_found'
-                ? 'Import expired. Upload the drawing again.'
-                : 'Lost the import job. Upload the drawing again.'),
-          )
+          setError(userMessageForImportError(payload.error, payload.message))
           setJob(null)
           return
         }
@@ -168,10 +169,10 @@ export function FloorplanImport({
           router.push(payload.editorUrl)
         }
         if (payload.status === 'error') {
-          setError(payload.error ?? 'Import failed')
+          setError(payload.error ?? 'Import failed. Please try again.')
         }
       } catch {
-        setError('Lost the connection while building 3D. Upload the drawing again.')
+        setError(NETWORK_LOST_MESSAGE)
         setJob(null)
       }
     }, 1000)
@@ -179,11 +180,9 @@ export function FloorplanImport({
   }, [job, router])
 
   const waiting = Boolean(job && job.status !== 'done' && job.status !== 'error')
-  const stage = STAGE_PROGRESS[job?.stage ?? ''] ?? {
-    label: job?.stage ?? '',
-    percent: waiting ? 30 : 0,
-  }
+  const stageLabel = STAGE_LABELS[job?.stage ?? ''] ?? job?.stage
   const visionMissing = vision !== null && !vision.visionConfigured
+  const warnings = (job?.warnings ?? []).filter(Boolean)
 
   return (
     <div
@@ -195,17 +194,14 @@ export function FloorplanImport({
       <div className="mb-4">
         <h2 className="font-semibold text-lg">Upload a floor plan</h2>
         <p className="mt-1 text-muted-foreground text-sm">
-          JPEG or PNG of an apartment drawing. We build a 3D apartment with the drawing on the
+          JPEG, PNG, WebP, or GIF of an apartment drawing. We build a 3D scene with the plan on the
           floor.
         </p>
       </div>
 
       {visionMissing && (
         <p className="mb-4 rounded-lg border border-amber-500/50 bg-amber-100 px-3 py-2 text-amber-950 text-sm">
-          Vision is off. Add <code className="font-mono">OPENROUTER_API_KEY</code> to{' '}
-          <code className="font-mono">.env.local</code> and restart the editor. Optional:{' '}
-          <code className="font-mono">FLOORPLAN_VISION_MODEL</code> (default{' '}
-          <code className="font-mono">openai/gpt-4.1</code>).
+          {UNCONFIGURED_USER_MESSAGE}
         </p>
       )}
 
@@ -263,7 +259,7 @@ export function FloorplanImport({
           />
         </label>
         <label className="text-sm">
-          <span className="mb-1 block text-muted-foreground">Ceiling height (m)</span>
+          <span className="mb-1 block text-muted-foreground">Ceiling height</span>
           <input
             className="w-full rounded-md border border-border bg-background px-3 py-2"
             disabled={waiting}
@@ -274,6 +270,7 @@ export function FloorplanImport({
             type="number"
             value={wallHeight}
           />
+          <span className="mt-1 block text-muted-foreground text-xs">2.0–4.5 m</span>
         </label>
       </div>
 
@@ -283,23 +280,31 @@ export function FloorplanImport({
         </p>
       )}
       {waiting && (
-        <div className="mt-3">
-          <div className="h-1.5 overflow-hidden rounded-full bg-accent">
-            <div
-              className="h-full bg-foreground/80 transition-[width] duration-500"
-              style={{ width: `${stage.percent}%` }}
-            />
+        <div className="mt-3 flex items-start gap-2 text-muted-foreground text-sm">
+          <Loader2 className="mt-0.5 size-4 shrink-0 animate-spin" />
+          <div>
+            <p>{stageLabel}</p>
+            <p>Usually under a minute.</p>
           </div>
-          <p className="mt-2 text-muted-foreground text-sm">{stage.label}</p>
         </div>
       )}
-      {job?.status === 'done' && job.editorUrl && (
-        <p className="mt-3 text-sm">
-          Scene ready.{' '}
-          <a className="underline" href={job.editorUrl}>
-            Open it
-          </a>
-        </p>
+      {job?.status === 'done' && (
+        <div className="mt-3 text-sm">
+          <p>{successSummary(job)}</p>
+          {warnings.map((warning) => (
+            <p className="mt-1 text-muted-foreground" key={warning}>
+              {warning}
+            </p>
+          ))}
+          {job.editorUrl && (
+            <p className="mt-2">
+              Opening the scene…{' '}
+              <a className="underline" href={job.editorUrl}>
+                Open it
+              </a>
+            </p>
+          )}
+        </div>
       )}
 
       <div className="mt-5 flex items-center gap-3">
@@ -313,7 +318,7 @@ export function FloorplanImport({
         </button>
         {file && (
           <button
-            className="text-muted-foreground text-sm underline"
+            className="text-muted-foreground text-sm underline disabled:opacity-50"
             disabled={waiting}
             onClick={() => {
               setFile(null)

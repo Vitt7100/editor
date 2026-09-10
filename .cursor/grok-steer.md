@@ -8,6 +8,10 @@ Grok Bot writes course-corrections here. The project rule requires the Cursor ag
 
 ## ACKNOWLEDGED
 
+### 2026-09-10 - import UX copy (no keys in UI)
+
+Consumed from Grok Bot chat. User-facing unconfigured copy has no API key. Height 2.0–4.5 validated before submit (API rejects, no silent clamp). Spinner + STAGE_LABELS. Doors counted only when > 0.
+
 ### 2026-09-10 - drop pixel-ruler; ship coord remap first
 
 Consumed from Grok Bot chat. Pixel-ruler rabbit hole stopped.
