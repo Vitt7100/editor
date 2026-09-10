@@ -1,7 +1,9 @@
 import type { SceneGraph } from '@pascal-app/editor'
 import { headers } from 'next/headers'
 import Link from 'next/link'
+import { FloorplanViewer } from '@/components/floorplan-viewer'
 import { SceneLoader, type SceneMeta } from '@/components/scene-loader'
+import { isFloorplanImportScene } from '@/lib/floorplan-import/is-import-scene'
 
 export const dynamic = 'force-dynamic'
 
@@ -36,8 +38,15 @@ async function fetchScene(id: string): Promise<SceneWithGraph | null> {
   return (await response.json()) as SceneWithGraph
 }
 
-export default async function ScenePage({ params }: { params: Promise<{ id: string }> }) {
+export default async function ScenePage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>
+  searchParams: Promise<{ edit?: string }>
+}) {
   const { id } = await params
+  const query = await searchParams
   const scene = await fetchScene(id)
 
   if (!scene) {
@@ -58,9 +67,9 @@ export default async function ScenePage({ params }: { params: Promise<{ id: stri
             </Link>
             <Link
               className="rounded-md border border-border bg-background px-3 py-2 font-medium text-sm hover:bg-accent/40"
-              href="/"
+              href="/new"
             >
-              Back to editor
+              Empty editor
             </Link>
           </div>
         </div>
@@ -69,5 +78,9 @@ export default async function ScenePage({ params }: { params: Promise<{ id: stri
   }
 
   const { graph, ...meta } = scene
+  const openEditor = query.edit === '1'
+  if (isFloorplanImportScene(graph) && !openEditor) {
+    return <FloorplanViewer initialScene={graph} meta={meta} />
+  }
   return <SceneLoader initialScene={graph} meta={meta} />
 }

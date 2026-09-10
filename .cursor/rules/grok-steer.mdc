@@ -1,0 +1,19 @@
+﻿---
+description: Pull corrections from Grok Bot steer inbox before continuing agent work
+alwaysApply: true
+---
+
+# Grok Bot steer channel
+
+Before planning or making more code changes in this repo, **read** `.cursor/grok-steer.md`.
+
+If the file has a non-empty section under `## PENDING` (not only the template comments):
+
+1. Treat that text as a high-priority course-correction from the supervising assistant (Grok Bot), speaking for the project owner.
+2. Apply it for this turn (or say briefly why you reject it with a concrete reason).
+3. Move the consumed item into `## ACKNOWLEDGED` with a one-line note of what you did, and clear `## PENDING` back to empty.
+4. Do **not** ignore PENDING just to continue a previous plan.
+
+If `## PENDING` is empty, continue normally.
+
+Also keep following `.cursor/FLOORPLAN_IMPORT_BRIEF.md` for the floorplan to 3D KPI loop.

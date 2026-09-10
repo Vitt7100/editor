@@ -9,12 +9,14 @@ import {
   type SceneGraph,
   type SidebarTab,
 } from '@pascal-app/editor'
+import { useViewer } from '@pascal-app/viewer'
 import { Hammer, Layers, Settings } from 'lucide-react'
 import Image from 'next/image'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { countGraphNodes, isEmptyGraphOverwrite } from '@/lib/empty-graph-guard'
+import { isFloorplanImportScene } from '@/lib/floorplan-import/is-import-scene'
 import { type PersistedSceneGraph, sceneGraphSignature } from '@/lib/scene-signature'
 import { cn } from '@/lib/utils'
 import { BuildTab } from './build-tab'
@@ -108,6 +110,12 @@ function isLightPreviewQuery(searchParams: URLSearchParams): boolean {
   return disable.split(',').some((p) => p.trim() === 'postFx')
 }
 
+function applyDemoWalls() {
+  if (useViewer.getState().wallMode !== 'translucent') {
+    useViewer.getState().setWallMode('translucent')
+  }
+}
+
 export function SceneLoader({ initialScene, meta }: SceneLoaderProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -122,6 +130,14 @@ export function SceneLoader({ initialScene, meta }: SceneLoaderProps) {
   const [saveError, setSaveError] = useState<string | null>(null)
 
   const lightPreview = isLightPreviewQuery(searchParams)
+
+  useEffect(() => {
+    if (!isFloorplanImportScene(initialScene)) return
+    applyDemoWalls()
+    const persist = useViewer.persist
+    if (persist.hasHydrated()) return
+    return persist.onFinishHydration(applyDemoWalls)
+  }, [initialScene])
 
   const handleLoad = useCallback(async () => initialScene, [initialScene])
 

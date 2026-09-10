@@ -1,7 +1,9 @@
 import { headers } from 'next/headers'
 import Link from 'next/link'
+import { FloorplanImport } from '@/components/floorplan-import'
 import { CreateSceneButton } from '@/components/save-button'
 import type { SceneMeta } from '@/components/scene-loader'
+import { getConfiguredVisionProvider } from '@/lib/floorplan-import/vision'
 
 export const dynamic = 'force-dynamic'
 
@@ -43,6 +45,7 @@ function formatDate(iso: string): string {
 
 export default async function ScenesPage() {
   const scenes = await fetchScenes()
+  const provider = getConfiguredVisionProvider()
 
   return (
     <div className="min-h-screen bg-background">
@@ -53,16 +56,27 @@ export default async function ScenesPage() {
               className="text-muted-foreground transition-colors hover:text-foreground"
               href="/"
             >
-              Home
+              Upload plan
             </Link>
             <span className="text-muted-foreground">/</span>
             <span className="font-medium text-foreground">Scenes</span>
           </nav>
-          <CreateSceneButton />
+          <div className="flex items-center gap-3">
+            <Link className="text-muted-foreground text-sm hover:text-foreground" href="/new">
+              Empty editor
+            </Link>
+            <CreateSceneButton />
+          </div>
         </div>
       </header>
 
       <main className="container mx-auto max-w-5xl px-6 py-12">
+        <div className="mb-10">
+          <FloorplanImport
+            compact
+            initialVision={{ visionConfigured: provider !== null, provider }}
+          />
+        </div>
         <h1 className="mb-2 font-bold text-3xl">Your scenes</h1>
         <p className="mb-8 text-muted-foreground text-sm">
           {scenes.length === 0

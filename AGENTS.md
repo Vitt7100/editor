@@ -50,3 +50,8 @@ Invoke the `review-architecture` skill (`.agents/skills/review-architecture/SKIL
 - After two consecutive tool failures, stop and change approach.
 - Don't introduce backwards-compatibility shims, dead code, or speculative abstractions.
 - Don't write new comments unless they explain a non-obvious *why*.
+
+## Grok Bot steer channel
+
+Before continuing work, read `.cursor/grok-steer.md` (`## PENDING`). Project rule `grok-steer` also enforces this.
+Floorplan KPI brief: `.cursor/FLOORPLAN_IMPORT_BRIEF.md`.
