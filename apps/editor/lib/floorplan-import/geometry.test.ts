@@ -5,7 +5,6 @@ import {
   detectImageCoordinateSpace,
   extractBounds,
   extractMaxAbs,
-  isImagePixelBox,
   normalizeFloorplanCoords,
   registerExtractToBox,
   toImagePixels,

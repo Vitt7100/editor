@@ -1,6 +1,7 @@
 import { generateSlug } from '@pascal-app/mcp/storage'
 import { getSceneOperations } from '@/lib/scene-store-server'
 import { buildSceneFromFloorplan } from './build-scene'
+import type { PlanContentBox } from './geometry'
 import { writeGuideImage } from './guide-store'
 import { parseImageSize } from './image-size'
 import { IMPORT_TIMEOUT_MESSAGE } from './import-copy'
@@ -8,7 +9,6 @@ import { BAD_IMAGE_MESSAGE, formatImportError } from './import-errors'
 import { updateImportJob } from './jobs'
 import { detectPlanContentBox } from './plan-content'
 import { extractFloorplanFromImage } from './vision'
-import type { PlanContentBox } from './geometry'
 
 export async function runFloorplanImport(jobId: string): Promise<void> {
   const current = updateImportJob(jobId, { status: 'running', stage: 'reading' })

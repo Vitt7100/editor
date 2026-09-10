@@ -15,10 +15,7 @@ test('failing-001-px2 still looks like the wrong pixel grid', () => {
 
 test('parseOuterWallJson accepts full-image pixels and rejects a ~1000-square', () => {
   expect(
-    parseOuterWallJson(
-      '{"outerWall":{"min":[420,16],"max":[1447,1131]}}',
-      FAILING_IMAGE,
-    ),
+    parseOuterWallJson('{"outerWall":{"min":[420,16],"max":[1447,1131]}}', FAILING_IMAGE),
   ).toEqual({ minX: 420, minY: 16, maxX: 1447, maxY: 1131 })
   expect(
     parseOuterWallJson('{"outerWall":{"min":[295,10],"max":[985,755]}}', FAILING_IMAGE),

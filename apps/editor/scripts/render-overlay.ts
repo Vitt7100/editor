@@ -2,8 +2,8 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import sharp from 'sharp'
 import { parseImageSize } from '../lib/floorplan-import/image-size'
-import type { ExtractedFloorplan } from '../lib/floorplan-import/schema'
 import { detectPlanContentBox } from '../lib/floorplan-import/plan-content'
+import type { ExtractedFloorplan } from '../lib/floorplan-import/schema'
 import { overlayExtracted } from './overlay-coords'
 
 const outDir = process.argv[2]

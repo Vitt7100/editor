@@ -309,11 +309,7 @@ export function normalizeFloorplanCoords(
   const maxAbs = maxAbsCoord(points)
   const space = detectImageCoordinateSpace(points, imageSize.width, imageSize.height)
   const target =
-    (isImagePixelBox(
-      planBoundsToBox(extracted.planBounds),
-      imageSize.width,
-      imageSize.height,
-    )
+    (isImagePixelBox(planBoundsToBox(extracted.planBounds), imageSize.width, imageSize.height)
       ? planBoundsToBox(extracted.planBounds)
       : null) ??
     (isImagePixelBox(options?.contentBox, imageSize.width, imageSize.height)
