@@ -3,8 +3,9 @@ import { getSceneOperations } from '@/lib/scene-store-server'
 import { buildSceneFromFloorplan } from './build-scene'
 import { writeGuideImage } from './guide-store'
 import { parseImageSize } from './image-size'
+import { BAD_IMAGE_MESSAGE, formatImportError } from './import-errors'
 import { updateImportJob } from './jobs'
-import { extractFloorplanFromImage, VisionUnavailableError } from './vision'
+import { extractFloorplanFromImage } from './vision'
 
 export async function runFloorplanImport(jobId: string): Promise<void> {
   const current = updateImportJob(jobId, { status: 'running', stage: 'reading' })
@@ -17,11 +18,20 @@ export async function runFloorplanImport(jobId: string): Promise<void> {
     updateImportJob(jobId, { stage: 'reading-drawing' })
     const bytes = Buffer.from(current.base64, 'base64')
     const imageSize = parseImageSize(bytes)
+    if (!imageSize) {
+      updateImportJob(jobId, {
+        status: 'error',
+        stage: 'failed',
+        error: BAD_IMAGE_MESSAGE,
+        base64: undefined,
+      })
+      return
+    }
     const extracted = await extractFloorplanFromImage({
       mimeType: current.mimeType,
       base64: current.base64,
-      width: imageSize?.width,
-      height: imageSize?.height,
+      width: imageSize.width,
+      height: imageSize.height,
     })
 
     updateImportJob(jobId, { stage: 'building-scene' })
@@ -58,12 +68,7 @@ export async function runFloorplanImport(jobId: string): Promise<void> {
       base64: undefined,
     })
   } catch (error) {
-    const message =
-      error instanceof VisionUnavailableError
-        ? error.message
-        : error instanceof Error
-          ? error.message
-          : 'Import failed'
+    const message = formatImportError(error)
     updateImportJob(jobId, {
       status: 'error',
       stage: 'failed',

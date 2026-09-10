@@ -17,7 +17,11 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
   const { id } = await params
   const job = getImportJob(id)
   if (!job) {
-    return sceneApiJson(request, { error: 'not_found' }, { status: 404 })
+    return sceneApiJson(
+      request,
+      { error: 'not_found', message: 'Import expired. Upload the drawing again.' },
+      { status: 404 },
+    )
   }
   return sceneApiJson(request, publicImportJob(job))
 }

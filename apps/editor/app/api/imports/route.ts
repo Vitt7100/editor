@@ -1,4 +1,5 @@
 import type { NextRequest } from 'next/server'
+import { MISSING_KEY_MESSAGE, TOO_LARGE_MESSAGE } from '@/lib/floorplan-import/import-errors'
 import { createImportJob, publicImportJob } from '@/lib/floorplan-import/jobs'
 import { runFloorplanImport } from '@/lib/floorplan-import/run-import'
 import { DEFAULT_WALL_HEIGHT } from '@/lib/floorplan-import/schema'
@@ -35,7 +36,7 @@ export async function POST(request: NextRequest) {
       request,
       {
         error: 'vision_unconfigured',
-        message: 'Set OPENROUTER_API_KEY in .env.local and restart the editor.',
+        message: MISSING_KEY_MESSAGE,
       },
       { status: 503 },
     )
@@ -47,7 +48,10 @@ export async function POST(request: NextRequest) {
   } catch {
     return sceneApiJson(
       request,
-      { error: 'invalid_request', details: 'expected multipart form data' },
+      {
+        error: 'invalid_request',
+        message: 'Upload failed. Choose a floor-plan image and try again.',
+      },
       { status: 400 },
     )
   }
@@ -56,14 +60,17 @@ export async function POST(request: NextRequest) {
   if (!(file instanceof File)) {
     return sceneApiJson(
       request,
-      { error: 'invalid_request', details: 'file is required' },
+      { error: 'invalid_request', message: 'Choose a floor-plan image first.' },
       { status: 400 },
     )
   }
   if (file.size > MAX_UPLOAD_BYTES) {
     return sceneApiJson(
       request,
-      { error: 'too_large', details: 'Maximum size is 12 MB' },
+      {
+        error: 'too_large',
+        message: TOO_LARGE_MESSAGE,
+      },
       { status: 413 },
     )
   }
@@ -72,7 +79,10 @@ export async function POST(request: NextRequest) {
   if (!ALLOWED_MIME.has(mimeType)) {
     return sceneApiJson(
       request,
-      { error: 'invalid_request', details: 'Upload a JPEG, PNG, WebP, or GIF floor plan' },
+      {
+        error: 'invalid_request',
+        message: 'Upload a JPEG or PNG of the floor-plan drawing.',
+      },
       { status: 400 },
     )
   }

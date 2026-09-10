@@ -8,6 +8,15 @@ Grok Bot writes course-corrections here. The project rule requires the Cursor ag
 
 ## ACKNOWLEDGED
 
+### 2026-09-10 - drop pixel-ruler; ship coord remap first
+
+Consumed from Grok Bot chat. Pixel-ruler rabbit hole stopped.
+
+- Hypothesis confirmed: overlay/build-scene only remapped 0..1, so maxAbs≈985 on 1920×1280 stayed left-aligned.
+- Shipped shared `normalizeFloorplanCoords` (0..1, ~1000-square, pixels) used by overlay + build-scene.
+- Fixture `unit1000-1920x1280.json` + unit tests prove remapped polygons land on the 1920×1280 raster.
+- Live vision still needs local `OPENROUTER_API_KEY`; not invented here.
+
 ### 2026-09-10 - floorplan import: stop thrashing, close the KPI loop
 
 Consumed. Cycle 1-3 only. Viewer/build-scene not touched for KPI.

@@ -15,13 +15,14 @@ import {
   cleanPolygon,
   detectImageCoordinateSpace,
   distance2,
+  extractPoints,
   median,
+  normalizeFloorplanCoords,
   polygonArea,
   polygonBounds,
   projectPointToSegment,
   scalePoint,
   snapPoint,
-  toImagePixels,
   translatePoint,
   undirectedEdgeKey,
   weldVertices,
@@ -46,8 +47,8 @@ import {
   OPENING_MATCH_DISTANCE,
   ROOM_COLORS,
   type RoomKind,
-  type Vec2,
   VERTEX_WELD_TOLERANCE,
+  type Vec2,
 } from './schema'
 
 export type BuildSceneOptions = {
@@ -90,45 +91,48 @@ export function buildSceneFromFloorplan(
   const warnings: string[] = []
   const wallHeight = options.wallHeight ?? DEFAULT_WALL_HEIGHT
   const imageSize = options.imageSize ?? null
-  const source = detectImageCoordinateSpace(
-    extracted.rooms.flatMap((room) => room.polygon),
-    imageSize?.width,
-    imageSize?.height,
-  )
-  const toPx = (point: Vec2): Vec2 =>
-    imageSize ? toImagePixels(point, imageSize.width, imageSize.height, source) : point
+  const normalized = imageSize
+    ? normalizeFloorplanCoords(extracted, imageSize)
+    : {
+        extracted,
+        space: detectImageCoordinateSpace(extractPoints(extracted)),
+        maxAbs: 0,
+      }
+  const plan = normalized.extracted
+  const source = normalized.space
+  const inPixels = source !== 'metres'
 
-  const { rooms: preparedRooms, transform, imageRect } = prepareRooms(
-    extracted.rooms.map((room) => ({ ...room, polygon: room.polygon.map(toPx) })),
-    (extracted.dimensions ?? []).map((dimension) => ({
-      ...dimension,
-      start: toPx(dimension.start),
-      end: toPx(dimension.end),
-    })),
+  const {
+    rooms: preparedRooms,
+    transform,
+    imageRect,
+  } = prepareRooms(
+    plan.rooms,
+    plan.dimensions ?? [],
     warnings,
-    imageSize && source !== 'metres' ? imageSize : null,
-    source === 'metres' ? 'metres' : 'pixels',
+    imageSize && inPixels ? imageSize : null,
+    inPixels ? 'pixels' : 'metres',
   )
   if (preparedRooms.length === 0) {
     throw new Error('No usable rooms in the floor plan')
   }
 
   const passages = [
-    ...extracted.doors.map((door) => ({
+    ...plan.doors.map((door) => ({
       ...door,
       openingKind: door.openingKind ?? ('door' as const),
     })),
-    ...(extracted.openings ?? []).map((opening) => ({
+    ...(plan.openings ?? []).map((opening) => ({
       ...opening,
       openingKind: opening.openingKind ?? ('opening' as const),
     })),
   ].map((passage) => ({
     ...passage,
-    at: applyTransform(toPx(passage.at), transform),
+    at: applyTransform(passage.at, transform),
   }))
-  const windows = extracted.windows.map((window) => ({
+  const windows = plan.windows.map((window) => ({
     ...window,
-    at: applyTransform(toPx(window.at), transform),
+    at: applyTransform(window.at, transform),
     width: window.width,
   }))
 
