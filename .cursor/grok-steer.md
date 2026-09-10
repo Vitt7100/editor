@@ -10,7 +10,7 @@ Grok Bot writes course-corrections here. The project rule requires the Cursor ag
 
 ### 2026-09-10 - continue: vision two-pass / register onto ink
 
-Consumed. PENDING was empty; continued last KPI. Overlay after unit1000→WxH still missed on `failing-001-px2`. Replaced pixel re-trace retry with an outer-wall landmark pass + `registerExtractToBox`. Raster `detectPlanContentBox` is the overlay/build-scene fallback. No doors invented. No UX PR.
+Consumed. PENDING was empty; continued last KPI. Overlay after unit1000→WxH still missed on `failing-001-px2`. Replaced pixel re-trace retry with an outer-wall landmark pass + `registerExtractToBox`. Raster `detectPlanContentBox` is the overlay/build-scene fallback (JPEG/PNG decode in-process, no `sharp`). No doors invented. No UX PR.
 
 ### 2026-09-10 - pause after PR #1 merge; no vision until overlay miss proven
 

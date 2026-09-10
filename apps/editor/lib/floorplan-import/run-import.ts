@@ -1,13 +1,12 @@
 import { generateSlug } from '@pascal-app/mcp/storage'
 import { getSceneOperations } from '@/lib/scene-store-server'
 import { buildSceneFromFloorplan } from './build-scene'
-import type { PlanContentBox } from './geometry'
 import { writeGuideImage } from './guide-store'
 import { parseImageSize } from './image-size'
 import { IMPORT_TIMEOUT_MESSAGE } from './import-copy'
 import { BAD_IMAGE_MESSAGE, formatImportError } from './import-errors'
 import { updateImportJob } from './jobs'
-import { detectPlanContentBox } from './plan-content'
+import { detectPlanContentBoxFromBytes } from './plan-content'
 import { extractFloorplanFromImage } from './vision'
 
 export async function runFloorplanImport(jobId: string): Promise<void> {
@@ -36,7 +35,7 @@ export async function runFloorplanImport(jobId: string): Promise<void> {
       width: imageSize.width,
       height: imageSize.height,
     })
-    const contentBox = await detectContentBoxFromBytes(bytes)
+    const contentBox = detectPlanContentBoxFromBytes(bytes)
 
     updateImportJob(jobId, { stage: 'building-scene' })
     const sceneId = generateSlug()
@@ -80,21 +79,5 @@ export async function runFloorplanImport(jobId: string): Promise<void> {
       error: message,
       base64: undefined,
     })
-  }
-}
-
-async function detectContentBoxFromBytes(bytes: Buffer): Promise<PlanContentBox | null> {
-  try {
-    const mod = await import('sharp')
-    const sharp = mod.default
-    const raster = await sharp(bytes).raw().toBuffer({ resolveWithObject: true })
-    return detectPlanContentBox(
-      raster.data,
-      raster.info.width,
-      raster.info.height,
-      raster.info.channels,
-    )
-  } catch {
-    return null
   }
 }

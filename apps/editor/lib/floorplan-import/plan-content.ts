@@ -1,3 +1,5 @@
+import { decode as decodeJpeg } from 'jpeg-js'
+import { PNG } from 'pngjs'
 import type { PlanContentBox } from './geometry'
 
 const DARK_LUMA = 80
@@ -59,4 +61,43 @@ export function detectPlanContentBox(
   }
   if (box.maxX - box.minX < width * 0.15 || box.maxY - box.minY < height * 0.15) return null
   return box
+}
+
+export type DecodedRaster = {
+  data: Uint8Array
+  width: number
+  height: number
+  channels: number
+}
+
+export function decodePlanRaster(bytes: Uint8Array): DecodedRaster | null {
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+    const decoded = decodeJpeg(bytes, {
+      useTArray: true,
+      formatAsRGBA: true,
+      maxResolutionInMP: 40,
+    })
+    return {
+      data: decoded.data,
+      width: decoded.width,
+      height: decoded.height,
+      channels: 4,
+    }
+  }
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e) {
+    const png = PNG.sync.read(Buffer.from(bytes))
+    return {
+      data: png.data,
+      width: png.width,
+      height: png.height,
+      channels: 4,
+    }
+  }
+  return null
+}
+
+export function detectPlanContentBoxFromBytes(bytes: Uint8Array): PlanContentBox | null {
+  const raster = decodePlanRaster(bytes)
+  if (!raster) return null
+  return detectPlanContentBox(raster.data, raster.width, raster.height, raster.channels)
 }

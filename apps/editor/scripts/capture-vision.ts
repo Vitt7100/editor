@@ -1,8 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
-import sharp from 'sharp'
 import { parseImageSize } from '../lib/floorplan-import/image-size'
-import { detectPlanContentBox } from '../lib/floorplan-import/plan-content'
+import { detectPlanContentBoxFromBytes } from '../lib/floorplan-import/plan-content'
 import type { ExtractedFloorplan } from '../lib/floorplan-import/schema'
 import { extractFloorplanDebug } from '../lib/floorplan-import/vision'
 import { extractMaxAbs, overlayExtracted } from './overlay-coords'
@@ -93,13 +92,7 @@ const debug = await extractFloorplanDebug({
   height: imageSize.height,
 })
 
-const raster = await sharp(bytes).raw().toBuffer({ resolveWithObject: true })
-const contentBox = detectPlanContentBox(
-  raster.data,
-  raster.info.width,
-  raster.info.height,
-  raster.info.channels,
-)
+const contentBox = detectPlanContentBoxFromBytes(bytes)
 
 const relativeSrc = `./${basename(imagePath)}`
 writeFileSync(join(outDir, basename(imagePath)), bytes)

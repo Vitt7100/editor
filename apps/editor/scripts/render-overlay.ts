@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import sharp from 'sharp'
 import { parseImageSize } from '../lib/floorplan-import/image-size'
-import { detectPlanContentBox } from '../lib/floorplan-import/plan-content'
+import { detectPlanContentBoxFromBytes } from '../lib/floorplan-import/plan-content'
 import type { ExtractedFloorplan } from '../lib/floorplan-import/schema'
 import { overlayExtracted } from './overlay-coords'
 
@@ -55,13 +55,7 @@ function overlaySvg(
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${size.width}" height="${size.height}">${rooms}${doors}${openings}${windows}</svg>`
 }
 
-const raster = await sharp(bytes).raw().toBuffer({ resolveWithObject: true })
-const contentBox = detectPlanContentBox(
-  raster.data,
-  raster.info.width,
-  raster.info.height,
-  raster.info.channels,
-)
+const contentBox = detectPlanContentBoxFromBytes(bytes)
 const svg = overlaySvg(extracted, imageSize, contentBox)
 writeFileSync(join(outDir, 'overlay.svg'), svg)
 await sharp(bytes)

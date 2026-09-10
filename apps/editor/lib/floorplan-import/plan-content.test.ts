@@ -1,5 +1,7 @@
 import { expect, test } from 'bun:test'
-import { detectPlanContentBox } from './plan-content'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { detectPlanContentBox, detectPlanContentBoxFromBytes } from './plan-content'
 
 test('detectPlanContentBox finds a dark rectangle on a white page', () => {
   const width = 100
@@ -48,4 +50,12 @@ test('detectPlanContentBox ignores a thin dark spike outside the plan', () => {
   expect(box).not.toBeNull()
   expect(box?.maxY).toBeLessThan(70)
   expect(box?.maxY).toBe(50)
+})
+
+test('detectPlanContentBoxFromBytes finds the failing-001 drawing, not the page margin', () => {
+  const bytes = readFileSync(join(import.meta.dir, 'fixtures/failing-001-px2/failing-001.jpg'))
+  const meta = JSON.parse(
+    readFileSync(join(import.meta.dir, 'fixtures/failing-001-px2/meta.json'), 'utf8'),
+  ) as { contentBox: { minX: number; minY: number; maxX: number; maxY: number } }
+  expect(detectPlanContentBoxFromBytes(bytes)).toEqual(meta.contentBox)
 })
