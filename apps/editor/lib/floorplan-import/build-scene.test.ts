@@ -314,6 +314,34 @@ test('~1000-square extract aligns walls with the full 1920×1280 guide, not the 
   expect(doorNodes[0]).toMatchObject({ type: 'door', openingKind: 'door' })
 })
 
+test('failing-001-px2 registered to the ink box keeps only extracted doors', () => {
+  const fixture = JSON.parse(
+    readFileSync(join(import.meta.dir, 'fixtures/failing-001-px2/extract.json'), 'utf8'),
+  ) as ExtractedFloorplan
+  const meta = JSON.parse(
+    readFileSync(join(import.meta.dir, 'fixtures/failing-001-px2/meta.json'), 'utf8'),
+  ) as { contentBox: { minX: number; minY: number; maxX: number; maxY: number } }
+  const built = buildSceneFromFloorplan(fixture, {
+    imageSize: { width: 1920, height: 1280 },
+    contentBox: meta.contentBox,
+    guide: { url: '/api/scenes/abc/guide', name: 'Plan' },
+  })
+  expect(built.rooms).toBe(fixture.rooms.length)
+  expect(built.doors).toBe(fixture.doors.length)
+  expect(built.windows).toBe(fixture.windows.length)
+  const guide = Object.values(built.graph.nodes).find((node) => node.type === 'guide')
+  expect(guide?.type).toBe('guide')
+  if (guide?.type !== 'guide') return
+  const zones = Object.values(built.graph.nodes).filter((node) => node.type === 'zone')
+  const xs = zones.flatMap((zone) =>
+    zone.type === 'zone' ? zone.polygon.map((point) => point[0]) : [],
+  )
+  const maxX = Math.max(...xs)
+  const guideHalfWidth = guide.scale * 5
+  // Registered right wall is the drawing (~1447px), not the page edge (1920).
+  expect(maxX / guideHalfWidth).toBeCloseTo((1447 / 1920) * 2 - 1, 1)
+})
+
 test('parseVisionJson accepts fenced JSON', () => {
   const parsed = parseVisionJson(`\`\`\`json
 ${JSON.stringify(twoRooms)}

@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import sharp from 'sharp'
 import { parseImageSize } from '../lib/floorplan-import/image-size'
+import { detectPlanContentBoxFromBytes } from '../lib/floorplan-import/plan-content'
 import type { ExtractedFloorplan } from '../lib/floorplan-import/schema'
 import { overlayExtracted } from './overlay-coords'
 
@@ -18,8 +19,12 @@ const bytes = readFileSync(imagePath)
 const imageSize = parseImageSize(bytes)
 if (!imageSize) throw new Error('Could not parse image size')
 
-function overlaySvg(plan: ExtractedFloorplan, size: { width: number; height: number }): string {
-  const remapped = overlayExtracted(plan, size)
+function overlaySvg(
+  plan: ExtractedFloorplan,
+  size: { width: number; height: number },
+  contentBox?: { minX: number; minY: number; maxX: number; maxY: number } | null,
+): string {
+  const remapped = overlayExtracted(plan, size, contentBox)
   const px = (x: number, y: number): [number, number] => [x, y]
   const rooms = remapped.rooms
     .map((room, index) => {
@@ -50,7 +55,8 @@ function overlaySvg(plan: ExtractedFloorplan, size: { width: number; height: num
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${size.width}" height="${size.height}">${rooms}${doors}${openings}${windows}</svg>`
 }
 
-const svg = overlaySvg(extracted, imageSize)
+const contentBox = detectPlanContentBoxFromBytes(bytes)
+const svg = overlaySvg(extracted, imageSize, contentBox)
 writeFileSync(join(outDir, 'overlay.svg'), svg)
 await sharp(bytes)
   .composite([{ input: Buffer.from(svg), blend: 'over' }])

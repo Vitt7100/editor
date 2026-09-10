@@ -158,7 +158,89 @@ export function extractPoints(extracted: ExtractedFloorplan): Vec2[] {
   for (const dimension of extracted.dimensions ?? []) {
     points.push(dimension.start, dimension.end)
   }
+  // planBounds is page metadata (often full-image pixels on a unit1000 extract).
   return points
+}
+
+export type PlanContentBox = {
+  minX: number
+  minY: number
+  maxX: number
+  maxY: number
+}
+
+export function extractBounds(extracted: ExtractedFloorplan): PlanContentBox | null {
+  const points = extractPoints(extracted)
+  if (points.length === 0) return null
+  const xs = points.map((point) => point[0])
+  const ys = points.map((point) => point[1])
+  return {
+    minX: Math.min(...xs),
+    maxX: Math.max(...xs),
+    minY: Math.min(...ys),
+    maxY: Math.max(...ys),
+  }
+}
+
+/** True when `box` is on the image raster, not a ~1000-square or 0..1. */
+export function isImagePixelBox(
+  box: PlanContentBox | null | undefined,
+  imageWidth: number,
+  imageHeight: number,
+): box is PlanContentBox {
+  if (!box) return false
+  const width = box.maxX - box.minX
+  const height = box.maxY - box.minY
+  if (width < 8 || height < 8) return false
+  if (box.minX < -imageWidth * 0.05 || box.minY < -imageHeight * 0.05) return false
+  if (box.maxX > imageWidth * 1.05 || box.maxY > imageHeight * 1.05) return false
+  const maxAbs = Math.max(
+    Math.abs(box.minX),
+    Math.abs(box.minY),
+    Math.abs(box.maxX),
+    Math.abs(box.maxY),
+  )
+  const maxSide = Math.max(imageWidth, imageHeight)
+  if (maxAbs <= 1.5) return false
+  if (maxAbs >= 700 && maxAbs <= 1100 && maxAbs < maxSide * 0.6) return false
+  return width >= imageWidth * 0.25 && height >= imageHeight * 0.25
+}
+
+export function planBoundsToBox(
+  planBounds: ExtractedFloorplan['planBounds'],
+): PlanContentBox | null {
+  if (!planBounds) return null
+  return {
+    minX: Math.min(planBounds.min[0], planBounds.max[0]),
+    maxX: Math.max(planBounds.min[0], planBounds.max[0]),
+    minY: Math.min(planBounds.min[1], planBounds.max[1]),
+    maxY: Math.max(planBounds.min[1], planBounds.max[1]),
+  }
+}
+
+/** Map the extract's own bbox onto `target` (axis-aligned). Does not add openings. */
+export function registerExtractToBox(
+  extracted: ExtractedFloorplan,
+  target: PlanContentBox,
+): ExtractedFloorplan {
+  const source = extractBounds(extracted)
+  if (!source) return extracted
+  const sourceW = source.maxX - source.minX
+  const sourceH = source.maxY - source.minY
+  if (sourceW < 1e-6 || sourceH < 1e-6) return extracted
+  const scaleX = (target.maxX - target.minX) / sourceW
+  const scaleY = (target.maxY - target.minY) / sourceH
+  const mapped = mapExtracted(extracted, ([x, y]) => [
+    target.minX + (x - source.minX) * scaleX,
+    target.minY + (y - source.minY) * scaleY,
+  ])
+  return {
+    ...mapped,
+    planBounds: {
+      min: [target.minX, target.minY],
+      max: [target.maxX, target.maxY],
+    },
+  }
 }
 
 export function extractMaxAbs(extracted: ExtractedFloorplan): number {
@@ -207,17 +289,40 @@ export type NormalizedFloorplan = {
   maxAbs: number
 }
 
+export type NormalizeFloorplanOptions = {
+  /** Outer-wall box in full-image pixels (raster detect or vision landmark). */
+  contentBox?: PlanContentBox | null
+}
+
 /**
- * Lift vision coordinates onto the image W×H pixel grid.
- * Identity for metres and for coordinates that are already pixels.
+ * Lift vision coordinates onto the image pixel grid.
+ * When the extract is a ~1000-square (or otherwise not the raster) and we have
+ * an image-pixel outer-wall box, register the extract bbox onto that box so
+ * walls sit on the drawing instead of the padded page.
  */
 export function normalizeFloorplanCoords(
   extracted: ExtractedFloorplan,
   imageSize: { width: number; height: number },
+  options?: NormalizeFloorplanOptions,
 ): NormalizedFloorplan {
   const points = extractPoints(extracted)
   const maxAbs = maxAbsCoord(points)
   const space = detectImageCoordinateSpace(points, imageSize.width, imageSize.height)
+  const target =
+    (isImagePixelBox(planBoundsToBox(extracted.planBounds), imageSize.width, imageSize.height)
+      ? planBoundsToBox(extracted.planBounds)
+      : null) ??
+    (isImagePixelBox(options?.contentBox, imageSize.width, imageSize.height)
+      ? options.contentBox
+      : null)
+  const needsRegister = space === 'unit1000'
+  if (target && needsRegister) {
+    return {
+      space: 'pixels',
+      maxAbs,
+      extracted: registerExtractToBox(extracted, target),
+    }
+  }
   if (space === 'metres' || space === 'pixels') {
     return { extracted, space, maxAbs }
   }
@@ -254,12 +359,7 @@ function mapExtracted(
       start: mapPoint(dimension.start),
       end: mapPoint(dimension.end),
     })),
-    planBounds: extracted.planBounds
-      ? {
-          min: mapPoint(extracted.planBounds.min),
-          max: mapPoint(extracted.planBounds.max),
-        }
-      : extracted.planBounds,
+    planBounds: extracted.planBounds,
   }
 }
 

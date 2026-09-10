@@ -6,6 +6,7 @@ import { parseImageSize } from './image-size'
 import { IMPORT_TIMEOUT_MESSAGE } from './import-copy'
 import { BAD_IMAGE_MESSAGE, formatImportError } from './import-errors'
 import { updateImportJob } from './jobs'
+import { detectPlanContentBoxFromBytes } from './plan-content'
 import { extractFloorplanFromImage } from './vision'
 
 export async function runFloorplanImport(jobId: string): Promise<void> {
@@ -34,6 +35,7 @@ export async function runFloorplanImport(jobId: string): Promise<void> {
       width: imageSize.width,
       height: imageSize.height,
     })
+    const contentBox = detectPlanContentBoxFromBytes(bytes)
 
     updateImportJob(jobId, { stage: 'building-scene' })
     const sceneId = generateSlug()
@@ -41,6 +43,7 @@ export async function runFloorplanImport(jobId: string): Promise<void> {
     const built = buildSceneFromFloorplan(extracted, {
       wallHeight: current.wallHeight,
       imageSize,
+      contentBox,
       guide: {
         url: `/api/scenes/${sceneId}/guide`,
         name: current.name,
