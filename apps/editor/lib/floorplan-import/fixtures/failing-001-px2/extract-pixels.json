@@ -1,5 +1,5 @@
 {
-  "notes": "True full-image pixels on failing-001.jpg (1920×1280). Inner faces of gray walls. Not a 0..1000 square.",
+  "notes": "True full-image pixels on failing-001.jpg (1920×1280). Inner faces including the hallway wardrobe niche. Not a 0..1000 square.",
   "confidence": 0.95,
   "planBounds": { "min": [420, 16], "max": [1447, 1131] },
   "rooms": [
@@ -12,9 +12,11 @@
         [952, 560],
         [1112, 560],
         [1112, 1088],
-        [830, 1088],
-        [830, 700],
-        [952, 700]
+        [923, 1088],
+        [923, 1038],
+        [834, 1038],
+        [834, 882],
+        [952, 882]
       ]
     },
     {
@@ -25,9 +27,9 @@
       "polygon": [
         [464, 129],
         [952, 129],
-        [952, 700],
-        [830, 700],
-        [830, 1088],
+        [952, 882],
+        [834, 882],
+        [834, 1088],
         [464, 1088]
       ]
     },

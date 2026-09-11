@@ -4,10 +4,20 @@ import {
   extractPoints,
   isImagePixelBox,
   type PlanContentBox,
+  pointInPolygon,
+  polygonArea,
+  scaleExtractedToImage,
 } from './geometry'
-import type { ImageSize } from './image-size'
+import { type ImageSize, parseImageSize } from './image-size'
 import { UNCONFIGURED_USER_MESSAGE } from './import-copy'
-import { type ExtractedFloorplan, extractedFloorplanSchema } from './schema'
+import {
+  type ExtractedFloorplan,
+  extractedFloorplanSchema,
+  extractedOpeningSchema,
+  extractedWindowSchema,
+  type RoomKind,
+  roomKinds,
+} from './schema'
 
 export class VisionUnavailableError extends Error {
   constructor(message = UNCONFIGURED_USER_MESSAGE) {
@@ -39,8 +49,13 @@ export const UNCONFIGURED_ADMIN_LOG =
   'Set OPENROUTER_API_KEY in .env.local, then restart the editor.'
 
 const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-4.1'
+const DEFAULT_OPENROUTER_CLEAN_MODEL = 'openai/gpt-image-1'
 const DEFAULT_OPENAI_MODEL = 'gpt-4.1'
 const DEFAULT_ANTHROPIC_MODEL = 'claude-sonnet-4-5'
+
+/** Owner-proven walls-only clean. Keep this short — the image model follows it in one shot. */
+export const CLEAN_WALLS_PROMPT =
+  'Очисти этот план квартиры, оставив только внутренние и наружные стены.\nClean this apartment floor plan, leaving only interior and exterior walls.'
 
 export function getConfiguredVisionProvider(): VisionProvider | null {
   if (process.env.OPENROUTER_API_KEY) return 'openrouter'
@@ -52,9 +67,11 @@ export function getConfiguredVisionProvider(): VisionProvider | null {
 export type FloorplanExtractDebug = {
   provider: VisionProvider
   model: string
+  cleanModel?: string
   observation: string
   raw: string
   extracted: ExtractedFloorplan
+  cleaned?: VisionImage
 }
 
 export async function extractFloorplanFromImage(image: VisionImage): Promise<ExtractedFloorplan> {
@@ -68,63 +85,74 @@ export async function extractFloorplanDebug(image: VisionImage): Promise<Floorpl
     throw new VisionUnavailableError(UNCONFIGURED_MESSAGE)
   }
 
-  const size =
+  const originalSize =
     image.width && image.height ? { width: image.width, height: image.height } : undefined
-  let observation = '{}'
-  try {
-    observation = await runVisionPass(
-      provider,
-      image,
-      size,
-      observeSystemPrompt(size),
-      observeUserPrompt(size),
-    )
-  } catch {
-    observation = '{}'
+
+  let cleaned: VisionImage | undefined
+  if (provider === 'openrouter') {
+    try {
+      cleaned = await cleanWallsImage(image)
+    } catch {
+      cleaned = undefined
+    }
   }
+
+  const traceImage = cleaned ?? image
+  const traceSize =
+    traceImage.width && traceImage.height
+      ? { width: traceImage.width, height: traceImage.height }
+      : originalSize
+
   let raw = await runVisionPass(
     provider,
-    image,
-    size,
-    traceSystemPrompt(size),
-    traceUserPrompt(size, observation),
+    traceImage,
+    traceSize,
+    traceSystemPrompt(traceSize),
+    traceUserPrompt(traceSize),
   )
   let extracted = parseVisionJson(raw)
-  if (size && needsPixelRetry(extracted, size)) {
+  if (traceSize && needsPixelRetry(extracted, traceSize)) {
     try {
       raw = await runVisionPass(
         provider,
-        image,
-        size,
-        traceSystemPrompt(size),
-        pixelRetryUserPrompt(size, extracted, observation),
+        traceImage,
+        traceSize,
+        traceSystemPrompt(traceSize),
+        pixelRetryUserPrompt(traceSize, extracted),
       )
-      const retried = parseVisionJson(raw)
-      extracted = retried
+      extracted = parseVisionJson(raw)
     } catch {
       // Keep the first trace.
     }
-    if (needsPixelRetry(extracted, size)) {
-      try {
-        const landmarkRaw = await runVisionPass(
-          provider,
-          image,
-          size,
-          landmarkSystemPrompt(size),
-          landmarkUserPrompt(size),
-        )
-        extracted = attachOuterWall(extracted, landmarkRaw, size)
-      } catch {
-        // Last-resort register in overlay/build-scene may still remap unit1000.
-      }
+  }
+  if (cleaned && originalSize && traceSize) {
+    extracted = scaleExtractedToImage(extracted, traceSize, originalSize)
+  }
+
+  let observation = '{}'
+  if (originalSize) {
+    try {
+      observation = await runVisionPass(
+        provider,
+        image,
+        originalSize,
+        labelSystemPrompt(originalSize),
+        labelUserPrompt(originalSize),
+      )
+      extracted = attachRoomLabels(extracted, observation)
+    } catch {
+      observation = '{}'
     }
   }
+
   return {
     provider,
     model: visionModelFor(provider),
+    cleanModel: cleaned ? cleanModelFor() : undefined,
     observation,
     raw,
     extracted,
+    cleaned,
   }
 }
 
@@ -157,6 +185,10 @@ function visionModelFor(provider: VisionProvider): string {
   if (provider === 'anthropic') return process.env.FLOORPLAN_VISION_MODEL ?? DEFAULT_ANTHROPIC_MODEL
   if (provider === 'openai') return process.env.FLOORPLAN_VISION_MODEL ?? DEFAULT_OPENAI_MODEL
   return process.env.FLOORPLAN_VISION_MODEL ?? DEFAULT_OPENROUTER_MODEL
+}
+
+function cleanModelFor(): string {
+  return process.env.FLOORPLAN_CLEAN_MODEL ?? DEFAULT_OPENROUTER_CLEAN_MODEL
 }
 
 export function parseVisionJson(raw: string): ExtractedFloorplan {
@@ -209,162 +241,234 @@ function asPair(value: unknown): [number, number] | null {
 
 function pixelRule(size?: ImageSize): string {
   if (size) {
-    return `The image is ${size.width}×${size.height} pixels (NOT a square). Every coordinate is a PIXEL on that full raster: x=0 is the left edge, x=${size.width} is the right edge, y=0 is the top edge, y=${size.height} is the bottom edge. Do not use 0..1 fractions. Do not use metres. Do not use a 0..1000 square. Empty paper margin counts: a wall drawn in the middle of the page has middle pixel values, not 0 and not 1000.`
+    return `The image is ${size.width}×${size.height} pixels. Coordinates are full-image pixels — not 0..1, not a 0..1000 square.`
   }
-  return 'Coordinates are pixels of the full image, origin top-left. x right, y down. Do not use 0..1 fractions. Do not use a 0..1000 square.'
+  return 'Coordinates are pixels of the full image, origin top-left. Not 0..1, not a 0..1000 square.'
 }
 
-function observeSystemPrompt(size?: ImageSize): string {
-  return `You read a floor-plan drawing. Return ONLY JSON. Do not invent marks that are not printed or drawn.
-
+function labelSystemPrompt(size?: ImageSize): string {
+  return `Read labels and drawn openings on this floor-plan drawing. Return ONLY JSON.
 ${pixelRule(size)}
-Origin is the TOP-LEFT of the FULL image. x right, y down.
-
-First understand everything on the page. Then mentally clear furniture so later tracing can follow walls only.
 
 Schema:
 {
-  "outerWall": { "min": [x, y], "max": [x, y] },
-  "rooms": [{
-    "name": "string",
-    "number": "string",
-    "areaSqM": number,
-    "labelAt": [x, y]
-  }],
-  "labels": [{ "text": "string", "at": [x, y] }],
-  "areas": [{ "text": "string", "sqM": number, "at": [x, y] }],
-  "lengths": [{ "text": "string", "lengthM": number, "start": [x, y], "end": [x, y] }],
-  "furniture": [{ "kind": "string", "at": [x, y] }],
-  "notes": "string"
+  "rooms": [{ "name": "string", "kind": "living"|"bedroom"|"bathroom"|"kitchen"|"hallway"|"entry"|"balcony"|"storage"|"other", "number": "string", "areaSqM": number, "labelAt": [x, y] }],
+  "doors": [{ "at": [x, y], "width": number, "openingKind": "door", "hingesSide": "left"|"right", "swingDirection": "inward"|"outward" }],
+  "openings": [{ "at": [x, y], "width": number, "openingKind": "opening" }],
+  "windows": [{ "at": [x, y], "width": number }]
 }
 
-Rules:
-- Copy text as written (any language). Do not translate.
-- All coordinates are pixels of the FULL ${size ? `${size.width}×${size.height}` : ''} image, including margin.
-- outerWall is the axis-aligned outer face of the gray/black building outline (include a drawn balcony; exclude a door swing into empty paper).
-- rooms: one entry per enclosed space. labelAt is the printed number/name/area mark inside that room (true pixels). areaSqM only from a printed area (convert to m²). If a room has no printed area, omit areaSqM.
-- furniture includes beds, sofas, tables, kitchen units, toilets, baths, closets, stairs — not rooms. These must be ignored when tracing walls later.
-- lengths.lengthM is a printed wall/opening dimension converted to metres.
-- If a field is absent on the drawing, use an empty array.`
+Copy text as written. Do not invent doors, openings, or windows.`
 }
 
-function observeUserPrompt(size?: ImageSize): string {
+function labelUserPrompt(size?: ImageSize): string {
   const sizeLine = size ? `Scan size ${size.width}×${size.height}. ` : ''
-  return `${sizeLine}Read the whole drawing. List rooms (names, numbers, printed areas), labels, dimensions, and furniture. Give every position in full-image pixels. Do not trace wall polygons yet.`
+  return `${sizeLine}Read room names, numbers, printed areas, and any drawn doors/windows. Full-image pixels. Do not trace wall polygons.`
 }
 
 function traceSystemPrompt(size?: ImageSize): string {
-  return `You trace the STRUCTURAL floor plan into JSON. Return ONLY JSON.
-
-${pixelRule(size)}
-Origin is the TOP-LEFT of the FULL image, including margin. x right, y down.
-
-Mentally erase every piece of furniture, fixture, and text. Trace only the cleaned wall geometry.
+  return `You trace a walls-only floor plan into JSON. Return ONLY JSON.
+${pixelRule(size)} Origin top-left, x right, y down.
 
 Schema:
 {
-  "rooms": [{
-    "name": "string",
-    "kind": "living" | "bedroom" | "bathroom" | "kitchen" | "hallway" | "entry" | "balcony" | "storage" | "other",
-    "polygon": [[x, y], ...],
-    "labeledAreaSqM": number,
-    "roomNumber": "string"
-  }],
-  "doors": [{
-    "at": [x, y],
-    "width": number,
-    "openingKind": "door",
-    "hingesSide": "left" | "right",
-    "swingDirection": "inward" | "outward"
-  }],
-  "openings": [{ "at": [x, y], "width": number, "openingKind": "opening" }],
-  "windows": [{ "at": [x, y], "width": number }],
-  "dimensions": [{ "start": [x, y], "end": [x, y], "lengthM": number }],
+  "rooms": [{ "name": "string", "kind": "living"|"bedroom"|"bathroom"|"kitchen"|"hallway"|"entry"|"balcony"|"storage"|"other", "polygon": [[x, y], ...], "labeledAreaSqM": number, "roomNumber": "string" }],
+  "doors": [],
+  "openings": [],
+  "windows": [],
+  "dimensions": [],
   "planBounds": { "min": [x, y], "max": [x, y] },
   "confidence": number,
   "notes": "string"
 }
 
-Trace only what is drawn:
-- Coordinates are pixels on the FULL image, including empty margin. A wall drawn in the middle of a ${size ? `${size.width}×${size.height}` : 'WxH'} page is near the middle pixel, not 0 and not ~300 on a fake 1000 canvas.
-- Follow the ink. Room polygons are the inner face of the drawn wall lines, vertex by vertex, including every jog, niche, and thickness change.
-- Each room polygon MUST contain that room's printed label pixel from the observation pass when one exists.
-- If a room has a printed area, set labeledAreaSqM. If a room has no printed area, infer a plausible m² from its polygon vs rooms that do have printed areas (same drawing scale). Do not invent a second area for a room that already has a printed one.
-- name/kind come from printed labels when present; otherwise a short generic name.
-- Do not replace a room with its axis-aligned bounding box. An L-shaped or irregular room stays L-shaped or irregular.
-- Include every enclosed space whose walls are drawn, even if it has no number. Do not omit a wing of the apartment.
-- Furniture, fixtures, and dimension arrows are not rooms and not walls.
-- doors: a door leaf and/or swing arc is drawn. at = midpoint on the wall.
-- openings: a gap through a wall with no door leaf and no swing. Do not turn this into a door.
-- Do not add a door, opening, or window that is not drawn, even if a room would otherwise be unreachable.
-- windows: only window symbols / glazed openings that are drawn.
-- planBounds: outer-wall AABB in the same full-image pixels as the polygons.
-- dimensions: copy printed linear sizes (already converted to metres) with endpoints in pixels.
-- width of doors/windows/openings is metres.
-- confidence 0..1.`
+Follow inner wall faces, including every niche and jog. Do not simplify extra corners into an L or T box. Do not add doors that are not drawn.`
 }
 
-function landmarkSystemPrompt(size: ImageSize): string {
-  return `You locate the drawn building on a floor-plan scan. Return ONLY JSON. Do not list rooms, doors, windows, or furniture.
-
-The image is ${size.width}×${size.height} pixels. Origin TOP-LEFT of the FULL image, including margin. x right, y down.
-
-Schema:
-{ "outerWall": { "min": [x, y], "max": [x, y] } }
-
-Rules:
-- min is the top-left of the OUTER wall, max is the bottom-right, in pixels of this ${size.width}×${size.height} raster.
-- Ignore empty paper margin. Do not use a 0..1000 square. A right-hand outer wall is near x=${size.width} only if the ink is actually there; if the drawing sits in the middle of the page, say so with middle pixels.
-- Include the balcony if it is drawn as part of the building. Exclude a door swing that sticks out into empty page if you can.
-- Do not invent geometry.`
-}
-
-function landmarkUserPrompt(size: ImageSize): string {
-  return `Scan size ${size.width}×${size.height}. Return only the axis-aligned outer-wall rectangle in full-image pixels.`
-}
-
-function traceUserPrompt(size?: ImageSize, observation?: string): string {
+function traceUserPrompt(size?: ImageSize): string {
   const sizeLine = size ? `Scan size ${size.width}×${size.height}. ` : ''
-  const observed = observation
-    ? `\n\nInventory already read from this drawing (labels and furniture in full-image pixels):\n${observation}\nMentally erase furniture. Trace wall inner faces only. Each room polygon must contain that room's labelAt when present. Do not add doors that were not listed or drawn. Coordinates must match those label pixels, not a 0..1000 square.`
-    : ''
-  return `${sizeLine}Trace walls, rooms, doors, openings, and windows exactly as drawn. All coordinates are pixels on this ${size ? `${size.width}×${size.height}` : ''} image — not 0..1, not a ~1000 square.${observed}`
+  return `${sizeLine}Trace room polygons from this walls-only plan. Inner faces, every niche/jog. Full-image pixels. Return ONLY JSON.`
 }
 
-export function pixelRetryUserPrompt(
-  size: ImageSize,
-  previous: ExtractedFloorplan,
-  observation?: string,
-): string {
+export function pixelRetryUserPrompt(size: ImageSize, previous: ExtractedFloorplan): string {
   const maxAbs = extractMaxAbs(previous)
-  const observed = observation
-    ? `\n\nObservation (full-image pixels; polygons must contain these labelAt points):\n${observation}`
-    : ''
-  return `Scan size ${size.width}×${size.height}. Your previous JSON used the WRONG coordinate space (max abs ${maxAbs.toFixed(1)}). That is not full-image pixels.
-
-Redo the trace. Every vertex is a pixel on this ${size.width}×${size.height} raster (origin top-left, including margin).
-Forbidden: 0..1 fractions; a 0..1000 square (typical tell: x around 295..985 on a wider page); metres.
-The white paper margin has no rooms. Gray outer walls are inset from the page edges — look at the ink.
-Mentally erase furniture. Follow wall inner faces only.
-Do not add doors, openings, or windows that are not drawn.
-Return ONLY JSON with the same schema as before.${observed}`
+  return `Scan size ${size.width}×${size.height}. Previous JSON used the wrong coordinate space (max abs ${maxAbs.toFixed(1)}). Redo in full-image pixels. Forbidden: 0..1; a 0..1000 square; metres. Follow inner faces including niches. Do not add doors that are not drawn. Return ONLY JSON.`
 }
 
-export function floorplanVisionPrompts(
-  size?: ImageSize,
-  observation?: string,
-): {
+export function floorplanVisionPrompts(size?: ImageSize): {
+  clean: string
   observeSystem: string
   observeUser: string
   traceSystem: string
   traceUser: string
 } {
   return {
-    observeSystem: observeSystemPrompt(size),
-    observeUser: observeUserPrompt(size),
+    clean: CLEAN_WALLS_PROMPT,
+    observeSystem: labelSystemPrompt(size),
+    observeUser: labelUserPrompt(size),
     traceSystem: traceSystemPrompt(size),
-    traceUser: traceUserPrompt(size, observation),
+    traceUser: traceUserPrompt(size),
   }
+}
+
+const KIND_SET = new Set<string>(roomKinds)
+
+export function attachRoomLabels(extracted: ExtractedFloorplan, raw: string): ExtractedFloorplan {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(stripFences(raw))
+  } catch {
+    return extracted
+  }
+  if (!parsed || typeof parsed !== 'object') return extracted
+  const record = parsed as Record<string, unknown>
+  const labels = Array.isArray(record.rooms) ? record.rooms : []
+  const rooms = extracted.rooms.map((room) => ({ ...room }))
+  for (const label of labels) {
+    if (!label || typeof label !== 'object') continue
+    const row = label as Record<string, unknown>
+    const at = asPair(row.labelAt)
+    if (!at) continue
+    let bestIndex: number | null = null
+    let bestArea = Number.POSITIVE_INFINITY
+    rooms.forEach((room, index) => {
+      if (!pointInPolygon(at, room.polygon)) return
+      const area = polygonArea(room.polygon)
+      if (area < bestArea) {
+        bestIndex = index
+        bestArea = area
+      }
+    })
+    if (bestIndex == null) continue
+    const room = rooms[bestIndex]!
+    const name = typeof row.name === 'string' && row.name.trim() ? row.name.trim() : room.name
+    const kind =
+      typeof row.kind === 'string' && KIND_SET.has(row.kind) ? (row.kind as RoomKind) : room.kind
+    const number =
+      typeof row.number === 'string' && row.number.trim() ? row.number.trim() : room.roomNumber
+    const areaSqM =
+      typeof row.areaSqM === 'number' && row.areaSqM > 0 ? row.areaSqM : room.labeledAreaSqM
+    rooms[bestIndex] = {
+      ...room,
+      name,
+      kind,
+      roomNumber: number,
+      labeledAreaSqM: areaSqM,
+    }
+  }
+
+  const doors = Array.isArray(record.doors)
+    ? record.doors.flatMap((entry) => {
+        const result = extractedOpeningSchema.safeParse(entry)
+        return result.success ? [result.data] : []
+      })
+    : extracted.doors
+  const openings = Array.isArray(record.openings)
+    ? record.openings.flatMap((entry) => {
+        const result = extractedOpeningSchema.safeParse(entry)
+        return result.success ? [result.data] : []
+      })
+    : extracted.openings
+  const windows = Array.isArray(record.windows)
+    ? record.windows.flatMap((entry) => {
+        const result = extractedWindowSchema.safeParse(entry)
+        return result.success ? [result.data] : []
+      })
+    : extracted.windows
+
+  return { ...extracted, rooms, doors, openings, windows }
+}
+
+export async function cleanWallsImage(image: VisionImage): Promise<VisionImage> {
+  const apiKey = process.env.OPENROUTER_API_KEY ?? ''
+  const model = cleanModelFor()
+  const dataUrl = `data:${image.mimeType};base64,${image.base64}`
+  const requestBody: Record<string, unknown> = {
+    model,
+    prompt: CLEAN_WALLS_PROMPT,
+    input_references: [{ type: 'image_url', image_url: { url: dataUrl } }],
+    output_format: 'png',
+  }
+  if (image.width && image.height) {
+    requestBody.size = `${image.width}x${image.height}`
+  }
+  let response = await postOpenRouterImage(apiKey, requestBody)
+  if (!response.ok && image.width && image.height) {
+    const retryBody: Record<string, unknown> = {
+      model: requestBody.model,
+      prompt: requestBody.prompt,
+      input_references: requestBody.input_references,
+      output_format: requestBody.output_format,
+      aspect_ratio: aspectRatio(image.width, image.height),
+    }
+    response = await postOpenRouterImage(apiKey, retryBody)
+  }
+  if (!response.ok) {
+    throw new VisionResponseError(await readHttpError('OpenRouter image', response))
+  }
+  const parsed = parseImageResponse(await response.json())
+  const bytes = Buffer.from(parsed.base64, 'base64')
+  const size = parseImageSize(bytes)
+  return {
+    mimeType: parsed.mimeType,
+    base64: parsed.base64,
+    width: size?.width,
+    height: size?.height,
+  }
+}
+
+async function postOpenRouterImage(
+  apiKey: string,
+  body: Record<string, unknown>,
+): Promise<Response> {
+  return fetch('https://openrouter.ai/api/v1/images', {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${apiKey}`,
+      'content-type': 'application/json',
+      'HTTP-Referer': 'http://localhost:3002',
+      'X-Title': 'Pascal floorplan import',
+    },
+    body: JSON.stringify(body),
+  })
+}
+
+function aspectRatio(width: number, height: number): string {
+  const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b))
+  const divisor = gcd(width, height) || 1
+  return `${width / divisor}:${height / divisor}`
+}
+
+function parseImageResponse(payload: unknown): { mimeType: string; base64: string } {
+  if (!payload || typeof payload !== 'object') {
+    throw new VisionResponseError('OpenRouter image returned no image')
+  }
+  const record = payload as Record<string, unknown>
+  const data = Array.isArray(record.data) ? record.data[0] : undefined
+  const source = data && typeof data === 'object' ? (data as Record<string, unknown>) : record
+  const b64 = typeof source.b64_json === 'string' ? source.b64_json : null
+  const url =
+    typeof source.url === 'string'
+      ? source.url
+      : source.image_url && typeof source.image_url === 'object'
+        ? String((source.image_url as Record<string, unknown>).url ?? '')
+        : ''
+  const fromUrl = url.startsWith('data:') ? url.slice(url.indexOf(',') + 1) : null
+  const base64 = stripDataPrefix(b64 ?? fromUrl ?? '')
+  if (!base64) throw new VisionResponseError('OpenRouter image returned no image')
+  const mediaType =
+    typeof source.media_type === 'string'
+      ? source.media_type
+      : url.startsWith('data:image/jpeg')
+        ? 'image/jpeg'
+        : 'image/png'
+  return { mimeType: mediaType, base64 }
+}
+
+function stripDataPrefix(value: string): string {
+  const comma = value.indexOf(',')
+  if (value.startsWith('data:') && comma >= 0) return value.slice(comma + 1)
+  return value
 }
 
 function stripFences(raw: string): string {

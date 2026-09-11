@@ -1,7 +1,18 @@
+/**
+ * Live clean-then-trace against OpenRouter.
+ *
+ * Put OPENROUTER_API_KEY in repo-root .env.local, then:
+ *
+ *   bun apps/editor/scripts/capture-vision.ts \
+ *     apps/editor/lib/floorplan-import/fixtures/failing-001-px2/failing-001.jpg \
+ *     /tmp/floorplan-clean-trace
+ *
+ * Pass A writes cleaned.png (walls-only). Pass B+C write extract.json.
+ * overlay.html draws those polygons on the original scan.
+ */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 import { parseImageSize } from '../lib/floorplan-import/image-size'
-import { detectPlanContentBoxFromBytes } from '../lib/floorplan-import/plan-content'
 import type { ExtractedFloorplan } from '../lib/floorplan-import/schema'
 import { extractFloorplanDebug } from '../lib/floorplan-import/vision'
 import { extractMaxAbs, overlayExtracted } from './overlay-coords'
@@ -36,9 +47,8 @@ function mimeFromPath(filePath: string): string {
 function overlaySvg(
   extracted: ExtractedFloorplan,
   imageSize: { width: number; height: number },
-  contentBox?: { minX: number; minY: number; maxX: number; maxY: number } | null,
 ): string {
-  const plan = overlayExtracted(extracted, imageSize, contentBox)
+  const plan = overlayExtracted(extracted, imageSize)
   const px = (x: number, y: number): [number, number] => [x, y]
   const rooms = plan.rooms
     .map((room, index) => {
@@ -92,10 +102,13 @@ const debug = await extractFloorplanDebug({
   height: imageSize.height,
 })
 
-const contentBox = detectPlanContentBoxFromBytes(bytes)
-
 const relativeSrc = `./${basename(imagePath)}`
 writeFileSync(join(outDir, basename(imagePath)), bytes)
+if (debug.cleaned?.base64) {
+  const cleanedBytes = Buffer.from(debug.cleaned.base64, 'base64')
+  const cleanedExt = debug.cleaned.mimeType.includes('jpeg') ? '.jpg' : '.png'
+  writeFileSync(join(outDir, `cleaned${cleanedExt}`), cleanedBytes)
+}
 writeFileSync(join(outDir, 'observation.json'), debug.observation)
 writeFileSync(join(outDir, 'extract.raw.txt'), debug.raw)
 writeFileSync(join(outDir, 'extract.json'), `${JSON.stringify(debug.extracted, null, 2)}\n`)
@@ -116,7 +129,7 @@ writeFileSync(
 <body>
 <div class="wrap">
   <img src="${relativeSrc}" width="${imageSize.width}" height="${imageSize.height}" />
-  <svg viewBox="0 0 ${imageSize.width} ${imageSize.height}" preserveAspectRatio="none">${overlaySvg(debug.extracted, imageSize, contentBox)}</svg>
+  <svg viewBox="0 0 ${imageSize.width} ${imageSize.height}" preserveAspectRatio="none">${overlaySvg(debug.extracted, imageSize)}</svg>
 </div>
 </body>
 </html>
@@ -135,9 +148,9 @@ console.log(
     openings: debug.extracted.openings?.length ?? 0,
     windows: debug.extracted.windows.length,
     maxAbs: Number(extractMaxAbs(debug.extracted).toFixed(4)),
-    overlayMaxAbs: Number(
-      extractMaxAbs(overlayExtracted(debug.extracted, imageSize, contentBox)).toFixed(4),
-    ),
+    overlayMaxAbs: Number(extractMaxAbs(overlayExtracted(debug.extracted, imageSize)).toFixed(4)),
+    cleaned: Boolean(debug.cleaned),
+    cleanModel: debug.cleanModel,
     outDir,
   }),
 )

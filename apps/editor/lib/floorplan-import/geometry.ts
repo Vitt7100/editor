@@ -358,8 +358,37 @@ function mapExtracted(
       start: mapPoint(dimension.start),
       end: mapPoint(dimension.end),
     })),
-    planBounds: extracted.planBounds,
+    planBounds: extracted.planBounds
+      ? { min: mapPoint(extracted.planBounds.min), max: mapPoint(extracted.planBounds.max) }
+      : extracted.planBounds,
   }
+}
+
+/** Map extract coordinates from a cleaned raster onto the original image size. */
+export function scaleExtractedToImage(
+  extracted: ExtractedFloorplan,
+  fromSize: { width: number; height: number },
+  toSize: { width: number; height: number },
+): ExtractedFloorplan {
+  if (fromSize.width === toSize.width && fromSize.height === toSize.height) return extracted
+  if (fromSize.width < 1 || fromSize.height < 1) return extracted
+  const scaleX = toSize.width / fromSize.width
+  const scaleY = toSize.height / fromSize.height
+  return mapExtracted(extracted, ([x, y]) => [x * scaleX, y * scaleY])
+}
+
+export function pointInPolygon(point: Vec2, polygon: Vec2[]): boolean {
+  const [x, y] = point
+  let inside = false
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i]![0]
+    const yi = polygon[i]![1]
+    const xj = polygon[j]![0]
+    const yj = polygon[j]![1]
+    const crosses = yi > y !== yj > y
+    if (crosses && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside
+  }
+  return inside
 }
 
 /** Collapse nearby vertices so shared room corners become identical. */

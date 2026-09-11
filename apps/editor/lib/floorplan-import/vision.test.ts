@@ -4,6 +4,8 @@ import { join } from 'node:path'
 import type { ExtractedFloorplan } from './schema'
 import {
   attachOuterWall,
+  attachRoomLabels,
+  CLEAN_WALLS_PROMPT,
   floorplanVisionPrompts,
   needsPixelRetry,
   parseOuterWallJson,
@@ -52,25 +54,26 @@ test('failing-001 true-pixel extract does not need retry or register', () => {
 })
 
 test('pixel retry prompt forbids the 0..1000 square and keeps the raster size', () => {
-  const prompt = pixelRetryUserPrompt(FAILING_IMAGE, px2, '{"rooms":[]}')
+  const prompt = pixelRetryUserPrompt(FAILING_IMAGE, px2)
   expect(prompt).toContain('1920')
   expect(prompt).toContain('1280')
   expect(prompt).toContain('1000')
   expect(prompt).toContain('not drawn')
 })
 
-test('observe+trace prompts demand full-image pixels and cleared furniture', () => {
-  const prompts = floorplanVisionPrompts(
-    FAILING_IMAGE,
-    '{"furniture":[{"kind":"bed","at":[1200,300]}]}',
-  )
-  expect(prompts.observeSystem).toContain('1920')
-  expect(prompts.observeSystem).toContain('furniture')
-  expect(prompts.observeSystem).toContain('1000')
-  expect(prompts.traceSystem).toContain('Mentally erase')
-  expect(prompts.traceSystem).toContain('inner face')
-  expect(prompts.traceUser).toContain('labelAt')
-  expect(prompts.traceUser).not.toContain('API')
+test('clean+trace prompts stay short and keep the owner walls-only clean', () => {
+  const prompts = floorplanVisionPrompts(FAILING_IMAGE)
+  expect(prompts.clean).toBe(CLEAN_WALLS_PROMPT)
+  expect(prompts.clean).toContain('Очисти этот план квартиры')
+  expect(prompts.clean).toContain('interior and exterior walls')
+  expect(prompts.clean.length).toBeLessThan(300)
+  expect(prompts.traceSystem).toContain('1920')
+  expect(prompts.traceSystem).toContain('niche')
+  expect(prompts.traceSystem).toContain('not drawn')
+  expect(prompts.traceSystem).not.toContain('Mentally erase')
+  expect(prompts.traceUser).toContain('walls-only')
+  expect(prompts.observeSystem).toContain('labelAt')
+  expect(prompts.observeUser).not.toContain('API')
 })
 
 test('parseOuterWallJson accepts full-image pixels and rejects a ~1000-square', () => {
@@ -91,4 +94,24 @@ test('attachOuterWall stores the landmark and does not add doors', () => {
   expect(next.planBounds).toEqual({ min: [420, 16], max: [1447, 1131] })
   expect(next.doors).toHaveLength(px2.doors.length)
   expect(next.rooms).toEqual(px2.rooms)
+})
+
+test('attachRoomLabels copies names from the original onto cleaned polygons', () => {
+  const unlabeled: ExtractedFloorplan = {
+    ...pixels,
+    rooms: pixels.rooms.map((room) => ({ ...room, name: 'Room', roomNumber: undefined })),
+  }
+  const next = attachRoomLabels(
+    unlabeled,
+    JSON.stringify({
+      rooms: [
+        { name: 'Hallway', kind: 'hallway', number: '1', areaSqM: 3.9, labelAt: [1030, 760] },
+      ],
+      doors: pixels.doors,
+    }),
+  )
+  const hallway = next.rooms.find((room) => room.kind === 'hallway')
+  expect(hallway?.name).toBe('Hallway')
+  expect(hallway?.roomNumber).toBe('1')
+  expect(next.doors).toHaveLength(pixels.doors.length)
 })
