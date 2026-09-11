@@ -5,7 +5,7 @@ import { userMessageForImportError, VISION_FAIL_MESSAGE } from './import-copy'
 import { formatImportError } from './import-errors'
 import { VisionResponseError } from './vision'
 
-const SECRET_LEAK = /OPENROUTER_API_KEY|\.env\.local|FLOORPLAN_VISION_MODEL/
+const SECRET_LEAK = /OPENROUTER_API_KEY|\.env\.local|FLOORPLAN_VISION_MODEL|FLOORPLAN_CLEAN_MODEL/
 
 test('API error codes map to user strings, not invalid_request', () => {
   expect(userMessageForImportError('file_required')).toBe('Choose a floor-plan image first.')

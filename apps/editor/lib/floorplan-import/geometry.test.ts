@@ -7,6 +7,7 @@ import {
   extractMaxAbs,
   normalizeFloorplanCoords,
   registerExtractToBox,
+  scaleExtractedToImage,
   toImagePixels,
   UNIT1000_CANVAS,
 } from './geometry'
@@ -283,4 +284,62 @@ test('unit1000 register onto contentBox is not a substitute for true-pixel JSON'
   const minY = Math.min(...ys)
   // Stretched unit1000 bedroom stays too low to cover the bed ink.
   expect(minY).toBeGreaterThan(labels.ink.bed.minY + 40)
+})
+
+const COARSE_HALLWAY: Array<[number, number]> = [
+  [952, 560],
+  [1112, 560],
+  [1112, 1088],
+  [830, 1088],
+  [830, 700],
+  [952, 700],
+]
+
+function hasVertexNear(
+  polygon: Array<[number, number]>,
+  x: number,
+  y: number,
+  tol: number,
+): boolean {
+  return polygon.some((point) => Math.abs(point[0] - x) <= tol && Math.abs(point[1] - y) <= tol)
+}
+
+test('failing-001 hallway follows the wardrobe niche jogs, not a coarse L', () => {
+  const hallway = pixels.rooms.find((room) => room.kind === 'hallway')
+  const living = pixels.rooms.find((room) => room.kind === 'living')
+  expect(hallway).toBeDefined()
+  expect(living).toBeDefined()
+  expect(hallway!.polygon).not.toEqual(COARSE_HALLWAY)
+  expect(hallway!.polygon.length).toBeGreaterThanOrEqual(8)
+
+  expect(hasVertexNear(hallway!.polygon, 834, 882, 30)).toBe(true)
+  expect(hasVertexNear(hallway!.polygon, 834, 1038, 30)).toBe(true)
+  expect(hasVertexNear(hallway!.polygon, 923, 1038, 30)).toBe(true)
+  expect(hasVertexNear(hallway!.polygon, 923, 1088, 30)).toBe(true)
+  expect(hasVertexNear(living!.polygon, 834, 882, 30)).toBe(true)
+  expect(hasVertexNear(living!.polygon, 952, 882, 30)).toBe(true)
+
+  const nicheWest = Math.min(
+    ...hallway!.polygon.filter((point) => point[1] > 860 && point[1] < 1060).map((point) => point[0]),
+  )
+  const southWest = Math.min(
+    ...hallway!.polygon.filter((point) => point[1] > 1060).map((point) => point[0]),
+  )
+  expect(nicheWest).toBeGreaterThan(810)
+  expect(nicheWest).toBeLessThan(860)
+  expect(southWest).toBeGreaterThan(nicheWest + 50)
+
+  const coarseStep = hallway!.polygon.some(
+    (point) => Math.abs(point[0] - 830) < 20 && Math.abs(point[1] - 700) < 30,
+  )
+  expect(coarseStep).toBe(false)
+})
+
+test('scaleExtractedToImage maps a cleaned raster onto the original size', () => {
+  const scaled = scaleExtractedToImage(pixels, { width: 960, height: 640 }, FAILING_IMAGE)
+  expect(scaled.rooms[0]?.polygon[0]).toEqual([
+    pixels.rooms[0]!.polygon[0]![0] * 2,
+    pixels.rooms[0]!.polygon[0]![1] * 2,
+  ])
+  expect(scaleExtractedToImage(pixels, FAILING_IMAGE, FAILING_IMAGE)).toEqual(pixels)
 })
