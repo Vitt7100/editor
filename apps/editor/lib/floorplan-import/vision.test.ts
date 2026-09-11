@@ -104,7 +104,9 @@ test('attachRoomLabels copies names from the original onto cleaned polygons', ()
   const next = attachRoomLabels(
     unlabeled,
     JSON.stringify({
-      rooms: [{ name: 'Hallway', kind: 'hallway', number: '1', areaSqM: 3.9, labelAt: [1030, 760] }],
+      rooms: [
+        { name: 'Hallway', kind: 'hallway', number: '1', areaSqM: 3.9, labelAt: [1030, 760] },
+      ],
       doors: pixels.doors,
     }),
   )

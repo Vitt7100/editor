@@ -320,7 +320,9 @@ test('failing-001 hallway follows the wardrobe niche jogs, not a coarse L', () =
   expect(hasVertexNear(living!.polygon, 952, 882, 30)).toBe(true)
 
   const nicheWest = Math.min(
-    ...hallway!.polygon.filter((point) => point[1] > 860 && point[1] < 1060).map((point) => point[0]),
+    ...hallway!.polygon
+      .filter((point) => point[1] > 860 && point[1] < 1060)
+      .map((point) => point[0]),
   )
   const southWest = Math.min(
     ...hallway!.polygon.filter((point) => point[1] > 1060).map((point) => point[0]),

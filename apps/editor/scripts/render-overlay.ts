@@ -18,10 +18,7 @@ const bytes = readFileSync(imagePath)
 const imageSize = parseImageSize(bytes)
 if (!imageSize) throw new Error('Could not parse image size')
 
-function overlaySvg(
-  plan: ExtractedFloorplan,
-  size: { width: number; height: number },
-): string {
+function overlaySvg(plan: ExtractedFloorplan, size: { width: number; height: number }): string {
   const remapped = overlayExtracted(plan, size)
   const px = (x: number, y: number): [number, number] => [x, y]
   const rooms = remapped.rooms

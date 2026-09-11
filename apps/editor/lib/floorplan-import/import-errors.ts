@@ -15,7 +15,11 @@ export function formatImportError(error: unknown): string {
       return VISION_FAIL_MESSAGE
     }
     if (/expired/i.test(error.message)) return IMPORT_TIMEOUT_MESSAGE
-    if (/OPENROUTER_API_KEY|\.env\.local|FLOORPLAN_VISION_MODEL|FLOORPLAN_CLEAN_MODEL/i.test(error.message)) {
+    if (
+      /OPENROUTER_API_KEY|\.env\.local|FLOORPLAN_VISION_MODEL|FLOORPLAN_CLEAN_MODEL/i.test(
+        error.message,
+      )
+    ) {
       return UNCONFIGURED_USER_MESSAGE
     }
     return error.message

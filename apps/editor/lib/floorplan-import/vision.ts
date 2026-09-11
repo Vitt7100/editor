@@ -342,10 +342,12 @@ export function attachRoomLabels(extracted: ExtractedFloorplan, raw: string): Ex
     if (bestIndex == null) continue
     const room = rooms[bestIndex]!
     const name = typeof row.name === 'string' && row.name.trim() ? row.name.trim() : room.name
-    const kind = typeof row.kind === 'string' && KIND_SET.has(row.kind) ? (row.kind as RoomKind) : room.kind
+    const kind =
+      typeof row.kind === 'string' && KIND_SET.has(row.kind) ? (row.kind as RoomKind) : room.kind
     const number =
       typeof row.number === 'string' && row.number.trim() ? row.number.trim() : room.roomNumber
-    const areaSqM = typeof row.areaSqM === 'number' && row.areaSqM > 0 ? row.areaSqM : room.labeledAreaSqM
+    const areaSqM =
+      typeof row.areaSqM === 'number' && row.areaSqM > 0 ? row.areaSqM : room.labeledAreaSqM
     rooms[bestIndex] = {
       ...room,
       name,
