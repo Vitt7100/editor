@@ -180,20 +180,11 @@ test('failing-001-px2 is unit1000 and WxH stretch still misses the drawn plan', 
   expect(bounds?.maxX).toBeGreaterThan(px2Meta.contentBox.maxX + 200)
 })
 
-test('failing-001-px2 registered onto the outer wall sits on the ink, not the margin', () => {
+test('last-resort register does not invent doors when vision still returns unit1000', () => {
   const { extracted, space } = normalizeFloorplanCoords(px2, FAILING_IMAGE, {
     contentBox: px2Meta.contentBox,
   })
   expect(space).toBe('pixels')
-  const bounds = extractBounds(extracted)
-  expect(bounds).not.toBeNull()
-  if (!bounds) return
-  expect(bounds.minX).toBeCloseTo(px2Meta.contentBox.minX, 5)
-  expect(bounds.maxX).toBeCloseTo(px2Meta.contentBox.maxX, 5)
-  expect(bounds.minY).toBeCloseTo(px2Meta.contentBox.minY, 5)
-  expect(bounds.maxY).toBeCloseTo(px2Meta.contentBox.maxY, 5)
-  expect(bounds.maxX).toBeLessThan(1500)
-  expect(bounds.minX).toBeGreaterThan(400)
   expect(extracted.doors).toHaveLength(px2.doors.length)
   expect(extracted.windows).toHaveLength(px2.windows.length)
   expect(extracted.openings ?? []).toHaveLength(px2.openings?.length ?? 0)
@@ -218,4 +209,78 @@ test('failing-001-px2 with a vision landmark planBounds registers without a rast
   expect(space).toBe('pixels')
   expect(extractBounds(extracted)?.maxX).toBeCloseTo(px2Meta.contentBox.maxX, 5)
   expect(extracted.doors).toHaveLength(px2.doors.length)
+})
+
+const pixels = JSON.parse(
+  readFileSync(join(import.meta.dir, 'fixtures/failing-001-px2/extract-pixels.json'), 'utf8'),
+) as ExtractedFloorplan
+
+type LabelMeta = {
+  labels: Array<{
+    kind: string
+    box: { minX: number; minY: number; maxX: number; maxY: number }
+  }>
+  ink: {
+    bed: { minX: number; minY: number; maxX: number; maxY: number }
+    tub: { minX: number; minY: number; maxX: number; maxY: number }
+  }
+}
+
+const labels = px2Meta as typeof px2Meta & LabelMeta
+
+function roomBBox(kind: string) {
+  const room = pixels.rooms.find((entry) => entry.kind === kind)
+  expect(room).toBeDefined()
+  const xs = room!.polygon.map((point) => point[0])
+  const ys = room!.polygon.map((point) => point[1])
+  return {
+    minX: Math.min(...xs),
+    maxX: Math.max(...xs),
+    minY: Math.min(...ys),
+    maxY: Math.max(...ys),
+  }
+}
+
+function overlaps(
+  a: { minX: number; maxX: number; minY: number; maxY: number },
+  b: { minX: number; maxX: number; minY: number; maxY: number },
+) {
+  return a.minX < b.maxX && a.maxX > b.minX && a.minY < b.maxY && a.maxY > b.minY
+}
+
+test('true-pixel failing-001 JSON is already image pixels and hugs labeled ink', () => {
+  const { extracted, space } = normalizeFloorplanCoords(pixels, FAILING_IMAGE)
+  expect(space).toBe('pixels')
+  expect(extracted.rooms).toEqual(pixels.rooms)
+  expect(extracted.doors).toHaveLength(pixels.doors.length)
+
+  const living = roomBBox('living')
+  const bedroom = roomBBox('bedroom')
+  const bathroom = roomBBox('bathroom')
+  const balcony = roomBBox('balcony')
+  const hallway = roomBBox('hallway')
+
+  expect(living.minX).toBeGreaterThan(450)
+  expect(living.minX).toBeLessThan(500)
+  expect(bedroom.maxX).toBeGreaterThan(1350)
+  expect(bedroom.maxX).toBeLessThan(1450)
+  expect(overlaps(bedroom, labels.ink.bed)).toBe(true)
+  expect(overlaps(bathroom, labels.ink.tub)).toBe(true)
+
+  for (const label of labels.labels) {
+    const box = roomBBox(label.kind)
+    expect(overlaps(box, label.box)).toBe(true)
+  }
+  expect(overlaps(balcony, labels.labels.find((row) => row.kind === 'balcony')!.box)).toBe(true)
+  expect(overlaps(hallway, labels.labels.find((row) => row.kind === 'hallway')!.box)).toBe(true)
+})
+
+test('unit1000 register onto contentBox is not a substitute for true-pixel JSON', () => {
+  const registered = registerExtractToBox(px2, px2Meta.contentBox)
+  const bedroom = registered.rooms.find((room) => room.kind === 'bedroom')
+  expect(bedroom).toBeDefined()
+  const ys = bedroom!.polygon.map((point) => point[1])
+  const minY = Math.min(...ys)
+  // Stretched unit1000 bedroom stays too low to cover the bed ink.
+  expect(minY).toBeGreaterThan(labels.ink.bed.minY + 40)
 })

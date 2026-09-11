@@ -296,9 +296,8 @@ export type NormalizeFloorplanOptions = {
 
 /**
  * Lift vision coordinates onto the image pixel grid.
- * When the extract is a ~1000-square (or otherwise not the raster) and we have
- * an image-pixel outer-wall box, register the extract bbox onto that box so
- * walls sit on the drawing instead of the padded page.
+ * Vision should already return full-image pixels. Registering a ~1000-square
+ * onto a raster box is a last-resort fallback only — not a successful extract.
  */
 export function normalizeFloorplanCoords(
   extracted: ExtractedFloorplan,

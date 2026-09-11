@@ -7,13 +7,13 @@ import type { ExtractedFloorplan } from '../lib/floorplan-import/schema'
 import { overlayExtracted } from './overlay-coords'
 
 const outDir = process.argv[2]
-if (!outDir) throw new Error('Usage: bun render-overlay.ts <outDir>')
+if (!outDir) throw new Error('Usage: bun render-overlay.ts <outDir> <imageFileName> [extractFile]')
 
-const extracted = JSON.parse(
-  readFileSync(join(outDir, 'extract.json'), 'utf8'),
-) as ExtractedFloorplan
 const imageName = process.argv[3]
-if (!imageName) throw new Error('Usage: bun render-overlay.ts <outDir> <imageFileName>')
+if (!imageName)
+  throw new Error('Usage: bun render-overlay.ts <outDir> <imageFileName> [extractFile]')
+const extractName = process.argv[4] ?? 'extract.json'
+const extracted = JSON.parse(readFileSync(join(outDir, extractName), 'utf8')) as ExtractedFloorplan
 const imagePath = join(outDir, imageName)
 const bytes = readFileSync(imagePath)
 const imageSize = parseImageSize(bytes)

@@ -338,8 +338,21 @@ test('failing-001-px2 registered to the ink box keeps only extracted doors', () 
   )
   const maxX = Math.max(...xs)
   const guideHalfWidth = guide.scale * 5
-  // Registered right wall is the drawing (~1447px), not the page edge (1920).
+  // Last-resort register keeps extracted door count; right wall is the drawing, not 1920.
   expect(maxX / guideHalfWidth).toBeCloseTo((1447 / 1920) * 2 - 1, 1)
+})
+
+test('true-pixel failing-001 extract builds without a contentBox fallback', () => {
+  const fixture = JSON.parse(
+    readFileSync(join(import.meta.dir, 'fixtures/failing-001-px2/extract-pixels.json'), 'utf8'),
+  ) as ExtractedFloorplan
+  const built = buildSceneFromFloorplan(fixture, {
+    imageSize: { width: 1920, height: 1280 },
+    guide: { url: '/api/scenes/abc/guide', name: 'Plan' },
+  })
+  expect(built.rooms).toBe(fixture.rooms.length)
+  expect(built.doors).toBe(fixture.doors.length)
+  expect(built.windows).toBe(fixture.windows.length)
 })
 
 test('parseVisionJson accepts fenced JSON', () => {

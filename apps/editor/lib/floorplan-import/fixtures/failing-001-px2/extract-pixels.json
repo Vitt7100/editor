@@ -1,0 +1,86 @@
+{
+  "notes": "True full-image pixels on failing-001.jpg (1920×1280). Inner faces of gray walls. Not a 0..1000 square.",
+  "confidence": 0.95,
+  "planBounds": { "min": [420, 16], "max": [1447, 1131] },
+  "rooms": [
+    {
+      "name": "Hallway",
+      "kind": "hallway",
+      "roomNumber": "1",
+      "labeledAreaSqM": 3.9,
+      "polygon": [
+        [952, 560],
+        [1112, 560],
+        [1112, 1088],
+        [830, 1088],
+        [830, 700],
+        [952, 700]
+      ]
+    },
+    {
+      "name": "Living Room/Kitchen",
+      "kind": "living",
+      "roomNumber": "2",
+      "labeledAreaSqM": 19.4,
+      "polygon": [
+        [464, 129],
+        [952, 129],
+        [952, 700],
+        [830, 700],
+        [830, 1088],
+        [464, 1088]
+      ]
+    },
+    {
+      "name": "Bedroom",
+      "kind": "bedroom",
+      "roomNumber": "3",
+      "labeledAreaSqM": 12.3,
+      "polygon": [
+        [952, 129],
+        [1402, 129],
+        [1402, 703],
+        [1112, 703],
+        [1112, 560],
+        [952, 560]
+      ]
+    },
+    {
+      "name": "Bathroom",
+      "kind": "bathroom",
+      "roomNumber": "4",
+      "labeledAreaSqM": 3.8,
+      "polygon": [
+        [1112, 703],
+        [1402, 703],
+        [1402, 1088],
+        [1112, 1088]
+      ]
+    },
+    {
+      "name": "Balcony",
+      "kind": "balcony",
+      "roomNumber": "5",
+      "labeledAreaSqM": 0.6,
+      "polygon": [
+        [632, 27],
+        [854, 27],
+        [854, 129],
+        [632, 129]
+      ]
+    }
+  ],
+  "doors": [
+    { "at": [743, 129], "width": 0.9, "openingKind": "door", "hingesSide": "right", "swingDirection": "outward" },
+    { "at": [952, 560], "width": 0.8, "openingKind": "door", "hingesSide": "left", "swingDirection": "outward" },
+    { "at": [1112, 790], "width": 0.8, "openingKind": "door", "hingesSide": "left", "swingDirection": "inward" },
+    { "at": [980, 1088], "width": 0.9, "openingKind": "door", "hingesSide": "right", "swingDirection": "outward" }
+  ],
+  "openings": [],
+  "windows": [
+    { "at": [464, 450], "width": 1.5 },
+    { "at": [1220, 129], "width": 1.8 },
+    { "at": [743, 27], "width": 1.2 }
+  ],
+  "dimensions": []
+}
