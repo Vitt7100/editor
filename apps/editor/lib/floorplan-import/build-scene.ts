@@ -118,7 +118,7 @@ export function buildSceneFromFloorplan(
     warnings,
     imageSize && inPixels ? imageSize : null,
     inPixels ? 'pixels' : 'metres',
-    plan.totalAreaSqM,
+    plan.totalAreaSqM ?? undefined,
   )
   if (preparedRooms.length === 0) {
     throw new Error('No usable rooms in the floor plan')

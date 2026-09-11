@@ -26,15 +26,15 @@ export const extractedRoomSchema = z.object({
 
 export const extractedOpeningSchema = z.object({
   at: vec2Schema,
-  width: z.number().positive().optional(),
-  openingKind: z.enum(['door', 'opening']).optional(),
-  hingesSide: z.enum(['left', 'right']).optional(),
-  swingDirection: z.enum(['inward', 'outward']).optional(),
+  width: z.number().positive().nullish(),
+  openingKind: z.enum(['door', 'opening']).nullish(),
+  hingesSide: z.enum(['left', 'right']).nullish(),
+  swingDirection: z.enum(['inward', 'outward']).nullish(),
 })
 
 export const extractedWindowSchema = z.object({
   at: vec2Schema,
-  width: z.number().positive().optional(),
+  width: z.number().positive().nullish(),
 })
 
 export const extractedDimensionSchema = z.object({
@@ -49,23 +49,23 @@ export const extractedFloorplanSchema = z.object({
   openings: z.array(extractedOpeningSchema).default([]),
   windows: z.array(extractedWindowSchema).default([]),
   dimensions: z.array(extractedDimensionSchema).default([]),
-  totalAreaSqM: z.number().positive().optional(),
+  totalAreaSqM: z.number().positive().nullish(),
   planBounds: z
     .object({
       min: vec2Schema,
       max: vec2Schema,
     })
-    .optional(),
+    .nullish(),
   confidence: z.number().min(0).max(1).default(0.5),
-  notes: z.string().optional(),
+  notes: z.string().nullish(),
 })
 
 export const floorplanUnderstandRoomSchema = z.object({
-  name: z.string().optional(),
-  kind: z.enum(roomKinds).optional(),
-  number: z.string().optional(),
-  areaSqM: z.number().positive().optional(),
-  labelAt: vec2Schema.optional(),
+  name: z.string().nullish(),
+  kind: z.enum(roomKinds).nullish(),
+  number: z.string().nullish(),
+  areaSqM: z.number().positive().nullish(),
+  labelAt: vec2Schema.nullish(),
 })
 
 /** Step 1 (UNDERSTAND) — labels, openings, clutter, printed measures. No polygons. */
@@ -75,12 +75,12 @@ export const floorplanUnderstandSchema = z.object({
   openings: z.array(extractedOpeningSchema).default([]),
   windows: z.array(extractedWindowSchema).default([]),
   dimensions: z.array(extractedDimensionSchema).default([]),
-  totalAreaSqM: z.number().positive().optional(),
-  hasFurniture: z.boolean().default(false),
-  hasClutter: z.boolean().default(false),
-  hasPrintedAreas: z.boolean().default(false),
-  hasPrintedDimensions: z.boolean().default(false),
-  notes: z.string().optional(),
+  totalAreaSqM: z.number().positive().nullish(),
+  hasFurniture: z.boolean().nullish().default(false),
+  hasClutter: z.boolean().nullish().default(false),
+  hasPrintedAreas: z.boolean().nullish().default(false),
+  hasPrintedDimensions: z.boolean().nullish().default(false),
+  notes: z.string().nullish(),
 })
 
 export type ExtractedFloorplan = z.infer<typeof extractedFloorplanSchema>
@@ -147,7 +147,10 @@ export const ROOM_COLORS: Record<RoomKind, string> = {
 }
 
 /** Keep metre opening widths; drop pixel-like values so callers use defaults. */
-export function sanitizeMetreWidth(width: number | undefined, maxM: number): number | undefined {
+export function sanitizeMetreWidth(
+  width: number | null | undefined,
+  maxM: number,
+): number | undefined {
   if (width == null || !Number.isFinite(width) || width <= 0) return undefined
   if (width > maxM) return undefined
   return width

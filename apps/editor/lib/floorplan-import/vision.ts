@@ -26,6 +26,7 @@ import {
   roomKinds,
   sanitizeMetreWidth,
 } from './schema'
+import { prepareWorkingImage } from './upscale-image'
 
 export class VisionUnavailableError extends Error {
   constructor(message = UNCONFIGURED_USER_MESSAGE) {
@@ -81,6 +82,8 @@ export type FloorplanExtractDebug = {
   extracted: ExtractedFloorplan
   cleaned?: VisionImage
   needsClean?: boolean
+  upscaled?: boolean
+  workingSize?: ImageSize
 }
 
 export async function extractFloorplanFromImage(image: VisionImage): Promise<ExtractedFloorplan> {
@@ -94,23 +97,29 @@ export async function extractFloorplanDebug(image: VisionImage): Promise<Floorpl
     throw new VisionUnavailableError(UNCONFIGURED_MESSAGE)
   }
 
-  const originalSize =
-    image.width && image.height ? { width: image.width, height: image.height } : undefined
+  const prepared = prepareWorkingImage(image)
+  const working = prepared.image
+  const originalSize = prepared.originalSize
+  const workingSize = prepared.size ?? originalSize
 
-  // 1) UNDERSTAND — one vision pass on the original drawing.
+  // 1) UNDERSTAND — one vision pass on the (possibly upscaled) drawing.
   //    Rooms, openings, labels, clutter, printed measures. No polygons yet.
   let observation = '{}'
   let understood: FloorplanUnderstand | null = null
   try {
     observation = await runVisionPass(
       provider,
-      image,
-      originalSize,
-      understandSystemPrompt(originalSize),
-      understandUserPrompt(originalSize),
+      working,
+      workingSize,
+      understandSystemPrompt(workingSize),
+      understandUserPrompt(workingSize),
     )
     understood = parseUnderstandJson(observation)
-  } catch {
+    if (!understood && observation !== '{}') {
+      console.error('Floorplan understand JSON failed validation')
+    }
+  } catch (error) {
+    console.error('Floorplan understand failed:', errorMessage(error))
     observation = '{}'
     understood = null
   }
@@ -121,26 +130,27 @@ export async function extractFloorplanDebug(image: VisionImage): Promise<Floorpl
   let cleaned: VisionImage | undefined
   if (shouldClean) {
     try {
-      cleaned = await cleanWallsImage(image)
-    } catch {
+      cleaned = await cleanWallsImage(working)
+    } catch (error) {
+      console.error('Floorplan clean failed:', errorMessage(error))
       cleaned = undefined
     }
   }
 
   // 3) MEASURE → JSON — trace geometry, then bind printed areas/dimensions.
   //    If none were printed, leave those fields empty (scale from proportions later).
-  const traceImage = cleaned ?? image
+  const traceImage = cleaned ?? working
   const traceSize =
     traceImage.width && traceImage.height
       ? { width: traceImage.width, height: traceImage.height }
-      : originalSize
+      : workingSize
 
   let raw = await runVisionPass(
     provider,
     traceImage,
     traceSize,
     measureSystemPrompt(traceSize),
-    measureUserPrompt(traceSize),
+    measureUserPrompt(traceSize, understood),
   )
   let extracted = parseVisionJson(raw)
   if (traceSize && needsPixelRetry(extracted, traceSize)) {
@@ -150,20 +160,23 @@ export async function extractFloorplanDebug(image: VisionImage): Promise<Floorpl
         traceImage,
         traceSize,
         measureSystemPrompt(traceSize),
-        pixelRetryUserPrompt(traceSize, extracted),
+        pixelRetryUserPrompt(traceSize, extracted, understood),
       )
       extracted = parseVisionJson(raw)
-    } catch {
-      // Keep the first trace.
+    } catch (error) {
+      console.error('Floorplan pixel-retry failed:', errorMessage(error))
     }
   }
-  if (cleaned && originalSize && traceSize) {
-    extracted = scaleExtractedToImage(extracted, traceSize, originalSize)
+  // Bind labels in working-image space, then map back to the original raster.
+  if (cleaned && workingSize && traceSize) {
+    extracted = scaleExtractedToImage(extracted, traceSize, workingSize)
   }
-
   extracted = understood
     ? applyUnderstandToExtract(extracted, understood)
     : sanitizeExtracted(extracted)
+  if (workingSize && originalSize) {
+    extracted = scaleExtractedToImage(extracted, workingSize, originalSize)
+  }
 
   return {
     provider,
@@ -174,6 +187,8 @@ export async function extractFloorplanDebug(image: VisionImage): Promise<Floorpl
     extracted,
     cleaned,
     needsClean: shouldClean,
+    upscaled: prepared.upscaled,
+    workingSize,
   }
 }
 
@@ -288,14 +303,15 @@ Schema:
 Rules:
 - Copy labels as written. Room name is the room title, never a printed area (12.5 м² goes in areaSqM only).
 - areaSqM, totalAreaSqM, and dimensions.lengthM only when that number is printed on the drawing. Do not invent or estimate.
+- Omit a field instead of setting it to null.
 - Opening width is metres (typical door 0.7–1.2, window 0.9–2.0). Never pixel widths.
-- hasFurniture / hasClutter: true only when the drawing shows furniture or other non-structural junk. A walls+doors+windows plan is false/false.
+- hasFurniture / hasClutter: true only when the drawing shows movable furniture or other non-structural junk. Bathroom fixtures (toilet, sink, tub) are not furniture. A walls+doors+windows plan is false/false.
 - Do not invent doors, openings, windows, or dimensions.`
 }
 
 function understandUserPrompt(size?: ImageSize): string {
   const sizeLine = size ? `Scan size ${size.width}×${size.height}. ` : ''
-  return `${sizeLine}Understand this floor plan: rooms, walls, doors/windows, labels, furniture/clutter, printed dimensions or areas. Full-image pixels. Return ONLY JSON.`
+  return `${sizeLine}Understand this floor plan: rooms, walls, doors/windows, labels, furniture/clutter, printed dimensions or areas. Omit unused fields (do not emit null). Full-image pixels. Return ONLY JSON.`
 }
 
 function measureSystemPrompt(size?: ImageSize): string {
@@ -314,20 +330,43 @@ Schema:
   "notes": "string"
 }
 
-Follow inner wall faces, including every niche and jog. Do not simplify extra corners into an L or T box. Do not add doors that are not drawn. Do not invent labeledAreaSqM or dimensions. Opening width is metres, never pixels. Room name is the title, never a printed area.`
+Each room is one polygon of its own inner wall faces. Rooms must not overlap. Do not emit a living/kitchen mega-room that is the outer shell of the apartment. Follow every niche and jog. Do not simplify extra corners into an L or T box. Do not add doors that are not drawn. Do not invent labeledAreaSqM or dimensions. Opening width is metres, never pixels. Room name is the title, never a printed area.`
 }
 
-function measureUserPrompt(size?: ImageSize): string {
+function measureUserPrompt(size?: ImageSize, understood?: FloorplanUnderstand | null): string {
   const sizeLine = size ? `Scan size ${size.width}×${size.height}. ` : ''
-  return `${sizeLine}Trace room polygons. Inner faces, every niche/jog. Full-image pixels. Return ONLY JSON.`
+  const hints = measureRoomHints(understood)
+  const hintLine = hints ? ` ${hints}` : ''
+  return `${sizeLine}Trace room polygons. Inner faces, every niche/jog.${hintLine} Full-image pixels. Return ONLY JSON.`
 }
 
-export function pixelRetryUserPrompt(size: ImageSize, previous: ExtractedFloorplan): string {
+export function pixelRetryUserPrompt(
+  size: ImageSize,
+  previous: ExtractedFloorplan,
+  understood?: FloorplanUnderstand | null,
+): string {
   const maxAbs = extractMaxAbs(previous)
-  return `Scan size ${size.width}×${size.height}. Previous JSON used the wrong coordinate space (max abs ${maxAbs.toFixed(1)}). Redo in full-image pixels. Forbidden: 0..1; a 0..1000 square; metres. Follow inner faces including niches. Do not add doors that are not drawn. Do not invent labeledAreaSqM. Opening width is metres, never pixels. Return ONLY JSON.`
+  const hints = measureRoomHints(understood)
+  const hintLine = hints ? ` ${hints}` : ''
+  return `Scan size ${size.width}×${size.height}. Previous JSON used the wrong coordinate space (max abs ${maxAbs.toFixed(1)}). Redo in full-image pixels. Forbidden: 0..1; a 0..1000 square; metres. Follow inner faces including niches. Rooms must not overlap; living is not the outer shell. Do not add doors that are not drawn. Do not invent labeledAreaSqM. Opening width is metres, never pixels.${hintLine} Return ONLY JSON.`
 }
 
-export function floorplanVisionPrompts(size?: ImageSize): {
+export function measureRoomHints(understood?: FloorplanUnderstand | null): string {
+  const rooms = understood?.rooms ?? []
+  if (rooms.length === 0) return ''
+  const parts = rooms.map((room) => {
+    const name = room.name?.trim() || ROOM_KIND_LABELS[room.kind ?? 'other']
+    const at = room.labelAt ? `@[${room.labelAt[0]}, ${room.labelAt[1]}]` : ''
+    const area = room.areaSqM && room.areaSqM > 0 ? ` ${room.areaSqM}` : ''
+    return `${name}${at}${area}`
+  })
+  return `Emit exactly ${rooms.length} polygons, one per room: ${parts.join('; ')}. Rooms must not overlap; living is not the outer shell.`
+}
+
+export function floorplanVisionPrompts(
+  size?: ImageSize,
+  understood?: FloorplanUnderstand | null,
+): {
   understandSystem: string
   understandUser: string
   clean: string
@@ -341,7 +380,7 @@ export function floorplanVisionPrompts(size?: ImageSize): {
   const understandSystem = understandSystemPrompt(size)
   const understandUser = understandUserPrompt(size)
   const measureSystem = measureSystemPrompt(size)
-  const measureUser = measureUserPrompt(size)
+  const measureUser = measureUserPrompt(size, understood)
   return {
     understandSystem,
     understandUser,
@@ -368,8 +407,23 @@ export function parseUnderstandJson(raw: string): FloorplanUnderstand | null {
   } catch {
     return null
   }
-  const result = floorplanUnderstandSchema.safeParse(parsed)
+  const result = floorplanUnderstandSchema.safeParse(stripNulls(parsed))
   return result.success ? result.data : null
+}
+
+/** Models often emit `areaSqM: null`. Drop nulls so optional fields stay optional. */
+export function stripNulls(value: unknown): unknown {
+  if (value === null) return undefined
+  if (Array.isArray(value)) return value.map(stripNulls)
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [key, entry] of Object.entries(value)) {
+      if (entry === null) continue
+      out[key] = stripNulls(entry)
+    }
+    return out
+  }
+  return value
 }
 
 export function attachRoomLabels(extracted: ExtractedFloorplan, raw: string): ExtractedFloorplan {
@@ -437,7 +491,7 @@ export function applyUnderstandToExtract(
     openings,
     windows,
     dimensions: understood.dimensions,
-    totalAreaSqM: understood.totalAreaSqM,
+    totalAreaSqM: understood.totalAreaSqM ?? undefined,
   }
 }
 
@@ -486,19 +540,9 @@ export async function cleanWallsImage(image: VisionImage): Promise<VisionImage> 
     output_format: 'png',
   }
   if (image.width && image.height) {
-    requestBody.size = `${image.width}x${image.height}`
+    requestBody.aspect_ratio = nearestOpenRouterAspectRatio(image.width, image.height)
   }
-  let response = await postOpenRouterImage(apiKey, requestBody)
-  if (!response.ok && image.width && image.height) {
-    const retryBody: Record<string, unknown> = {
-      model: requestBody.model,
-      prompt: requestBody.prompt,
-      input_references: requestBody.input_references,
-      output_format: requestBody.output_format,
-      aspect_ratio: aspectRatio(image.width, image.height),
-    }
-    response = await postOpenRouterImage(apiKey, retryBody)
-  }
+  const response = await postOpenRouterImage(apiKey, requestBody)
   if (!response.ok) {
     throw new VisionResponseError(await readHttpError('OpenRouter image', response))
   }
@@ -529,10 +573,40 @@ async function postOpenRouterImage(
   })
 }
 
-function aspectRatio(width: number, height: number): string {
-  const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b))
-  const divisor = gcd(width, height) || 1
-  return `${width / divisor}:${height / divisor}`
+/** OpenRouter image models reject raw WxH and gcd ratios such as 473:334. */
+export const OPENROUTER_ASPECT_RATIOS = [
+  '1:1',
+  '5:4',
+  '4:3',
+  '3:2',
+  '16:9',
+  '4:5',
+  '3:4',
+  '2:3',
+  '9:16',
+  '2:1',
+  '1:2',
+] as const
+
+export function nearestOpenRouterAspectRatio(width: number, height: number): string {
+  if (!(width > 0) || !(height > 0)) return '1:1'
+  const target = width / height
+  let best: (typeof OPENROUTER_ASPECT_RATIOS)[number] = '1:1'
+  let bestDist = Number.POSITIVE_INFINITY
+  for (const ratio of OPENROUTER_ASPECT_RATIOS) {
+    const [rw, rh] = ratio.split(':').map(Number)
+    if (!rw || !rh) continue
+    const dist = Math.abs(Math.log(rw / rh / target))
+    if (dist < bestDist) {
+      bestDist = dist
+      best = ratio
+    }
+  }
+  return best
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 function parseImageResponse(payload: unknown): { mimeType: string; base64: string } {

@@ -154,6 +154,8 @@ console.log(
     needsClean: Boolean(debug.needsClean),
     cleaned: Boolean(debug.cleaned),
     cleanModel: debug.cleanModel,
+    upscaled: Boolean(debug.upscaled),
+    workingSize: debug.workingSize,
     outDir,
   }),
 )
