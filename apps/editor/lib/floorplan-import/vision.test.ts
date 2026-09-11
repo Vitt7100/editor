@@ -7,14 +7,17 @@ import {
   attachOuterWall,
   attachRoomLabels,
   CLEAN_WALLS_PROMPT,
+  dropOpeningsOutsideRooms,
   floorplanVisionPrompts,
   measureRoomHints,
   nearestOpenRouterAspectRatio,
   needsClean,
   needsPixelRetry,
+  overlapRetryUserPrompt,
   parseOuterWallJson,
   parseUnderstandJson,
   pixelRetryUserPrompt,
+  roomsContainEachOther,
   sanitizeExtracted,
   usesWrongPixelGrid,
 } from './vision'
@@ -70,7 +73,10 @@ test('pixel retry prompt forbids the 0..1000 square and keeps the raster size', 
 test('prompts follow understand → optional clean → measure', () => {
   const prompts = floorplanVisionPrompts(FAILING_IMAGE)
   expect(prompts.clean).toBe(CLEAN_WALLS_PROMPT)
-  expect(prompts.clean).toContain('Очисти этот план квартиры')
+  expect(prompts.clean).toContain('Очисти этот план')
+  expect(prompts.clean).toContain('floor plan')
+  expect(prompts.clean).not.toContain('квартир')
+  expect(prompts.clean).not.toContain('apartment')
   expect(prompts.clean).toContain('walls, windows, and doors')
   expect(prompts.clean.length).toBeLessThan(300)
   expect(prompts.understandSystem).toContain('hasFurniture')
@@ -79,6 +85,9 @@ test('prompts follow understand → optional clean → measure', () => {
   expect(prompts.understandSystem).toContain('areaSqM only')
   expect(prompts.understandSystem).toContain('Omit a field')
   expect(prompts.understandSystem).toContain('Bathroom fixtures')
+  expect(prompts.understandUser).toContain('EVERY enclosed room cell')
+  expect(prompts.understandUser).toContain('Doors and windows only on walls')
+  expect(prompts.understandUser).toContain('do not emit null')
   expect(prompts.understandUser).toContain('furniture/clutter')
   expect(prompts.understandUser).not.toContain('API')
   expect(prompts.measureSystem).toContain('1920')
@@ -300,4 +309,133 @@ test('measure prompts pass understand room hints and forbid mega-rooms', () => {
   expect(prompts.measureUser).toContain('Emit exactly 2 polygons')
   expect(prompts.measureUser).toContain('Hallway@[1030, 760]')
   expect(prompts.measureSystem).toContain('must not overlap')
+  expect(prompts.measureSystem).toContain('floor plan')
+  expect(prompts.measureSystem).not.toContain('apartment')
+})
+
+test('roomsContainEachOther is true only when a larger polygon holds another centroid', () => {
+  const nested: ExtractedFloorplan['rooms'] = [
+    {
+      name: 'Outer',
+      kind: 'other',
+      polygon: [
+        [0, 0],
+        [10, 0],
+        [10, 10],
+        [0, 10],
+      ],
+    },
+    {
+      name: 'Inner',
+      kind: 'other',
+      polygon: [
+        [2, 2],
+        [4, 2],
+        [4, 4],
+        [2, 4],
+      ],
+    },
+  ]
+  expect(roomsContainEachOther(nested)).toBe(true)
+
+  const sideBySide: ExtractedFloorplan['rooms'] = [
+    {
+      name: 'Left',
+      kind: 'other',
+      polygon: [
+        [0, 0],
+        [4, 0],
+        [4, 4],
+        [0, 4],
+      ],
+    },
+    {
+      name: 'Right',
+      kind: 'other',
+      polygon: [
+        [4, 0],
+        [8, 0],
+        [8, 4],
+        [4, 4],
+      ],
+    },
+  ]
+  expect(roomsContainEachOther(sideBySide)).toBe(false)
+})
+
+test('overlap retry prompt lists containment offenders and restates room hints', () => {
+  const previous: ExtractedFloorplan = {
+    rooms: [
+      {
+        name: 'Outer',
+        kind: 'other',
+        polygon: [
+          [0, 0],
+          [10, 0],
+          [10, 10],
+          [0, 10],
+        ],
+      },
+      {
+        name: 'Inner',
+        kind: 'other',
+        polygon: [
+          [2, 2],
+          [4, 2],
+          [4, 4],
+          [2, 4],
+        ],
+      },
+    ],
+    doors: [],
+    openings: [],
+    windows: [],
+    dimensions: [],
+    confidence: 0.5,
+  }
+  const understood = parseUnderstandJson(
+    JSON.stringify({
+      rooms: [
+        { name: 'Outer', kind: 'other', labelAt: [1, 1] },
+        { name: 'Inner', kind: 'other', labelAt: [3, 3] },
+      ],
+    }),
+  )
+  const prompt = overlapRetryUserPrompt({ width: 800, height: 600 }, previous, understood)
+  expect(prompt).toContain('"Outer" contains the centroid of "Inner"')
+  expect(prompt).toContain('Emit exactly 2 polygons')
+  expect(prompt).toContain('Outer@[1, 1]')
+  expect(prompt).toContain('800')
+})
+
+test('dropOpeningsOutsideRooms removes openings far from the room union', () => {
+  const plan: ExtractedFloorplan = {
+    rooms: [
+      {
+        name: 'A',
+        kind: 'other',
+        polygon: [
+          [0, 0],
+          [10, 0],
+          [10, 8],
+          [0, 8],
+        ],
+      },
+    ],
+    doors: [
+      { at: [5, 0], width: 0.9 },
+      { at: [200, 200], width: 0.9 },
+    ],
+    openings: [{ at: [400, -50], width: 0.8 }],
+    windows: [
+      { at: [10, 4], width: 1.2 },
+      { at: [-80, 4], width: 1.2 },
+    ],
+    dimensions: [],
+    confidence: 0.5,
+  }
+  const next = dropOpeningsOutsideRooms(plan)
+  expect(next.doors).toEqual([{ at: [5, 0], width: 0.9 }])
+  expect(next.openings).toEqual([])
+  expect(next.windows).toEqual([{ at: [10, 4], width: 1.2 }])
 })

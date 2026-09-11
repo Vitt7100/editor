@@ -6,6 +6,8 @@ import {
   type PlanContentBox,
   pointInPolygon,
   polygonArea,
+  polygonBounds,
+  polygonCentroid,
   scaleExtractedToImage,
 } from './geometry'
 import { type ImageSize, parseImageSize } from './image-size'
@@ -64,7 +66,7 @@ const DEFAULT_ANTHROPIC_MODEL = 'claude-sonnet-4-5'
 
 /** Conditional clean only. Keep this short — the image model follows it in one shot. */
 export const CLEAN_WALLS_PROMPT =
-  'Очисти этот план квартиры, оставив только стены, окна и двери.\nClean this apartment floor plan, leaving only walls, windows, and doors.'
+  'Очисти этот план, оставив только стены, окна и двери.\nClean this floor plan, leaving only walls, windows, and doors.'
 
 export function getConfiguredVisionProvider(): VisionProvider | null {
   if (process.env.OPENROUTER_API_KEY) return 'openrouter'
@@ -167,6 +169,23 @@ export async function extractFloorplanDebug(image: VisionImage): Promise<Floorpl
       console.error('Floorplan pixel-retry failed:', errorMessage(error))
     }
   }
+  if (traceSize && roomsContainEachOther(extracted.rooms)) {
+    try {
+      raw = await runVisionPass(
+        provider,
+        traceImage,
+        traceSize,
+        measureSystemPrompt(traceSize),
+        overlapRetryUserPrompt(traceSize, extracted, understood),
+      )
+      const retried = parseVisionJson(raw)
+      if (containmentPairs(retried.rooms).length <= containmentPairs(extracted.rooms).length) {
+        extracted = retried
+      }
+    } catch (error) {
+      console.error('Floorplan overlap-retry failed:', errorMessage(error))
+    }
+  }
   // Bind labels in working-image space, then map back to the original raster.
   if (cleaned && workingSize && traceSize) {
     extracted = scaleExtractedToImage(extracted, traceSize, workingSize)
@@ -174,6 +193,7 @@ export async function extractFloorplanDebug(image: VisionImage): Promise<Floorpl
   extracted = understood
     ? applyUnderstandToExtract(extracted, understood)
     : sanitizeExtracted(extracted)
+  extracted = dropOpeningsOutsideRooms(extracted)
   if (workingSize && originalSize) {
     extracted = scaleExtractedToImage(extracted, workingSize, originalSize)
   }
@@ -311,7 +331,7 @@ Rules:
 
 function understandUserPrompt(size?: ImageSize): string {
   const sizeLine = size ? `Scan size ${size.width}×${size.height}. ` : ''
-  return `${sizeLine}Understand this floor plan: rooms, walls, doors/windows, labels, furniture/clutter, printed dimensions or areas. Omit unused fields (do not emit null). Full-image pixels. Return ONLY JSON.`
+  return `${sizeLine}Understand this floor plan. List EVERY enclosed room cell (bedrooms, baths, storage/closet, hallway/entry) — do not skip small rooms. Doors and windows only on walls, not outside the plan. Rooms, labels, furniture/clutter, printed dimensions or areas. Omit unused fields (do not emit null). Full-image pixels. Return ONLY JSON.`
 }
 
 function measureSystemPrompt(size?: ImageSize): string {
@@ -330,7 +350,7 @@ Schema:
   "notes": "string"
 }
 
-Each room is one polygon of its own inner wall faces. Rooms must not overlap. Do not emit a living/kitchen mega-room that is the outer shell of the apartment. Follow every niche and jog. Do not simplify extra corners into an L or T box. Do not add doors that are not drawn. Do not invent labeledAreaSqM or dimensions. Opening width is metres, never pixels. Room name is the title, never a printed area.`
+Each room is one polygon of its own inner wall faces. Rooms must not overlap. Do not emit a mega-room that is the outer shell of the floor plan. Follow every niche and jog. Do not simplify extra corners into an L or T box. Do not add doors that are not drawn. Do not invent labeledAreaSqM or dimensions. Opening width is metres, never pixels. Room name is the title, never a printed area.`
 }
 
 function measureUserPrompt(size?: ImageSize, understood?: FloorplanUnderstand | null): string {
@@ -348,7 +368,7 @@ export function pixelRetryUserPrompt(
   const maxAbs = extractMaxAbs(previous)
   const hints = measureRoomHints(understood)
   const hintLine = hints ? ` ${hints}` : ''
-  return `Scan size ${size.width}×${size.height}. Previous JSON used the wrong coordinate space (max abs ${maxAbs.toFixed(1)}). Redo in full-image pixels. Forbidden: 0..1; a 0..1000 square; metres. Follow inner faces including niches. Rooms must not overlap; living is not the outer shell. Do not add doors that are not drawn. Do not invent labeledAreaSqM. Opening width is metres, never pixels.${hintLine} Return ONLY JSON.`
+  return `Scan size ${size.width}×${size.height}. Previous JSON used the wrong coordinate space (max abs ${maxAbs.toFixed(1)}). Redo in full-image pixels. Forbidden: 0..1; a 0..1000 square; metres. Follow inner faces including niches. Rooms must not overlap; no room is the outer shell of the floor plan. Do not add doors that are not drawn. Do not invent labeledAreaSqM. Opening width is metres, never pixels.${hintLine} Return ONLY JSON.`
 }
 
 export function measureRoomHints(understood?: FloorplanUnderstand | null): string {
@@ -360,7 +380,21 @@ export function measureRoomHints(understood?: FloorplanUnderstand | null): strin
     const area = room.areaSqM && room.areaSqM > 0 ? ` ${room.areaSqM}` : ''
     return `${name}${at}${area}`
   })
-  return `Emit exactly ${rooms.length} polygons, one per room: ${parts.join('; ')}. Rooms must not overlap; living is not the outer shell.`
+  return `Emit exactly ${rooms.length} polygons, one per room: ${parts.join('; ')}. Rooms must not overlap; no room is the outer shell of the floor plan.`
+}
+
+export function overlapRetryUserPrompt(
+  size: ImageSize,
+  previous: ExtractedFloorplan,
+  understood?: FloorplanUnderstand | null,
+): string {
+  const offenders = containmentPairs(previous.rooms)
+    .map((pair) => `"${pair.outer}" contains the centroid of "${pair.inner}"`)
+    .join('; ')
+  const listed = offenders || 'a larger room contains another room'
+  const hints = measureRoomHints(understood)
+  const hintLine = hints ? ` ${hints}` : ''
+  return `Scan size ${size.width}×${size.height}. Previous JSON has overlapping rooms: ${listed}. Each room must be only its own inner faces — not an outer shell that contains another room. Redo in full-image pixels.${hintLine} Return ONLY JSON.`
 }
 
 export function floorplanVisionPrompts(
@@ -398,6 +432,54 @@ const KIND_SET = new Set<string>(roomKinds)
 
 export function needsClean(understood: { hasFurniture?: boolean; hasClutter?: boolean }): boolean {
   return Boolean(understood.hasFurniture || understood.hasClutter)
+}
+
+export type ContainmentPair = { outer: string; inner: string }
+
+/** True when a larger room polygon contains another room's centroid. */
+export function roomsContainEachOther(rooms: ExtractedRoom[]): boolean {
+  return containmentPairs(rooms).length > 0
+}
+
+export function containmentPairs(rooms: ExtractedRoom[]): ContainmentPair[] {
+  if (rooms.length < 2) return []
+  const ranked = rooms.map((room, index) => ({
+    index,
+    room,
+    area: polygonArea(room.polygon),
+    centroid: polygonCentroid(room.polygon),
+    label: room.name?.trim() || ROOM_KIND_LABELS[room.kind] || `room ${index + 1}`,
+  }))
+  const pairs: ContainmentPair[] = []
+  for (const outer of ranked) {
+    for (const inner of ranked) {
+      if (outer.index === inner.index) continue
+      if (outer.area <= inner.area + 1e-6) continue
+      if (pointInPolygon(inner.centroid, outer.room.polygon)) {
+        pairs.push({ outer: outer.label, inner: inner.label })
+      }
+    }
+  }
+  return pairs
+}
+
+/** Drop openings whose `at` is far outside the union of room polygons. */
+export function dropOpeningsOutsideRooms(extracted: ExtractedFloorplan): ExtractedFloorplan {
+  const points = extracted.rooms.flatMap((room) => room.polygon)
+  if (points.length === 0) return extracted
+  const bounds = polygonBounds(points)
+  const pad = Math.max(bounds.width, bounds.depth, 1) * 0.12
+  const nearPlan = (at: [number, number]) =>
+    at[0] >= bounds.minX - pad &&
+    at[0] <= bounds.maxX + pad &&
+    at[1] >= bounds.minZ - pad &&
+    at[1] <= bounds.maxZ + pad
+  return {
+    ...extracted,
+    doors: extracted.doors.filter((door) => nearPlan(door.at)),
+    openings: extracted.openings.filter((opening) => nearPlan(opening.at)),
+    windows: extracted.windows.filter((window) => nearPlan(window.at)),
+  }
 }
 
 export function parseUnderstandJson(raw: string): FloorplanUnderstand | null {
