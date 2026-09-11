@@ -1,4 +1,10 @@
-import { isImagePixelBox, type PlanContentBox } from './geometry'
+import {
+  detectImageCoordinateSpace,
+  extractMaxAbs,
+  extractPoints,
+  isImagePixelBox,
+  type PlanContentBox,
+} from './geometry'
 import type { ImageSize } from './image-size'
 import { UNCONFIGURED_USER_MESSAGE } from './import-copy'
 import { type ExtractedFloorplan, extractedFloorplanSchema } from './schema'
@@ -84,18 +90,33 @@ export async function extractFloorplanDebug(image: VisionImage): Promise<Floorpl
     traceUserPrompt(size, observation),
   )
   let extracted = parseVisionJson(raw)
-  if (size && usesWrongPixelGrid(extracted, size)) {
+  if (size && needsPixelRetry(extracted, size)) {
     try {
-      const landmarkRaw = await runVisionPass(
+      raw = await runVisionPass(
         provider,
         image,
         size,
-        landmarkSystemPrompt(size),
-        landmarkUserPrompt(size),
+        traceSystemPrompt(size),
+        pixelRetryUserPrompt(size, extracted, observation),
       )
-      extracted = attachOuterWall(extracted, landmarkRaw, size)
+      const retried = parseVisionJson(raw)
+      extracted = retried
     } catch {
-      // Keep the first trace; overlay/build-scene still remaps unit1000.
+      // Keep the first trace.
+    }
+    if (needsPixelRetry(extracted, size)) {
+      try {
+        const landmarkRaw = await runVisionPass(
+          provider,
+          image,
+          size,
+          landmarkSystemPrompt(size),
+          landmarkUserPrompt(size),
+        )
+        extracted = attachOuterWall(extracted, landmarkRaw, size)
+      } catch {
+        // Last-resort register in overlay/build-scene may still remap unit1000.
+      }
     }
   }
   return {
@@ -107,14 +128,16 @@ export async function extractFloorplanDebug(image: VisionImage): Promise<Floorpl
   }
 }
 
+/** True when JSON is not already in full-image pixels (0..1, ~1000-square, or metres). */
+export function needsPixelRetry(extracted: ExtractedFloorplan, size: ImageSize): boolean {
+  const points = extractPoints(extracted)
+  if (points.length === 0) return false
+  return detectImageCoordinateSpace(points, size.width, size.height) !== 'pixels'
+}
+
+/** @deprecated Use needsPixelRetry — ~1000-square and 0..1 are both unsuccessful traces. */
 export function usesWrongPixelGrid(extracted: ExtractedFloorplan, size: ImageSize): boolean {
-  const xs = extracted.rooms.flatMap((room) => room.polygon.map((point) => point[0]))
-  const ys = extracted.rooms.flatMap((room) => room.polygon.map((point) => point[1]))
-  if (xs.length === 0) return false
-  const maxX = Math.max(...xs)
-  const maxY = Math.max(...ys)
-  if (maxX <= 1.5 && maxY <= 1.5) return false
-  return maxX < size.width * 0.6
+  return needsPixelRetry(extracted, size)
 }
 
 export function attachOuterWall(
@@ -186,9 +209,9 @@ function asPair(value: unknown): [number, number] | null {
 
 function pixelRule(size?: ImageSize): string {
   if (size) {
-    return `The image is ${size.width}×${size.height} pixels (NOT a square). Every coordinate is a PIXEL on that full raster: x=0 is the left edge, x=${size.width} is the right edge, y=0 is the top edge, y=${size.height} is the bottom edge. Do not use 0..1 fractions. Do not use metres.`
+    return `The image is ${size.width}×${size.height} pixels (NOT a square). Every coordinate is a PIXEL on that full raster: x=0 is the left edge, x=${size.width} is the right edge, y=0 is the top edge, y=${size.height} is the bottom edge. Do not use 0..1 fractions. Do not use metres. Do not use a 0..1000 square. Empty paper margin counts: a wall drawn in the middle of the page has middle pixel values, not 0 and not 1000.`
   }
-  return 'Coordinates are pixels of the full image, origin top-left. x right, y down. Do not use 0..1 fractions.'
+  return 'Coordinates are pixels of the full image, origin top-left. x right, y down. Do not use 0..1 fractions. Do not use a 0..1000 square.'
 }
 
 function observeSystemPrompt(size?: ImageSize): string {
@@ -197,8 +220,17 @@ function observeSystemPrompt(size?: ImageSize): string {
 ${pixelRule(size)}
 Origin is the TOP-LEFT of the FULL image. x right, y down.
 
+First understand everything on the page. Then mentally clear furniture so later tracing can follow walls only.
+
 Schema:
 {
+  "outerWall": { "min": [x, y], "max": [x, y] },
+  "rooms": [{
+    "name": "string",
+    "number": "string",
+    "areaSqM": number,
+    "labelAt": [x, y]
+  }],
   "labels": [{ "text": "string", "at": [x, y] }],
   "areas": [{ "text": "string", "sqM": number, "at": [x, y] }],
   "lengths": [{ "text": "string", "lengthM": number, "start": [x, y], "end": [x, y] }],
@@ -208,17 +240,17 @@ Schema:
 
 Rules:
 - Copy text as written (any language). Do not translate.
-- Coordinate "at" values are pixels of the full image (not 0..1).
-- areas.sqM is the printed area converted to square metres.
-- lengths.lengthM is a printed wall/opening dimension converted to metres (mm→m, cm→m).
-- Only include a length if both endpoints of that dimension are visible on the drawing.
-- furniture includes beds, sofas, tables, kitchen units, toilets, baths, stairs — not rooms.
+- All coordinates are pixels of the FULL ${size ? `${size.width}×${size.height}` : ''} image, including margin.
+- outerWall is the axis-aligned outer face of the gray/black building outline (include a drawn balcony; exclude a door swing into empty paper).
+- rooms: one entry per enclosed space. labelAt is the printed number/name/area mark inside that room (true pixels). areaSqM only from a printed area (convert to m²). If a room has no printed area, omit areaSqM.
+- furniture includes beds, sofas, tables, kitchen units, toilets, baths, closets, stairs — not rooms. These must be ignored when tracing walls later.
+- lengths.lengthM is a printed wall/opening dimension converted to metres.
 - If a field is absent on the drawing, use an empty array.`
 }
 
 function observeUserPrompt(size?: ImageSize): string {
   const sizeLine = size ? `Scan size ${size.width}×${size.height}. ` : ''
-  return `${sizeLine}List every printed label, area, and dimension, and every piece of furniture. Do not trace walls yet.`
+  return `${sizeLine}Read the whole drawing. List rooms (names, numbers, printed areas), labels, dimensions, and furniture. Give every position in full-image pixels. Do not trace wall polygons yet.`
 }
 
 function traceSystemPrompt(size?: ImageSize): string {
@@ -226,6 +258,8 @@ function traceSystemPrompt(size?: ImageSize): string {
 
 ${pixelRule(size)}
 Origin is the TOP-LEFT of the FULL image, including margin. x right, y down.
+
+Mentally erase every piece of furniture, fixture, and text. Trace only the cleaned wall geometry.
 
 Schema:
 {
@@ -246,22 +280,25 @@ Schema:
   "openings": [{ "at": [x, y], "width": number, "openingKind": "opening" }],
   "windows": [{ "at": [x, y], "width": number }],
   "dimensions": [{ "start": [x, y], "end": [x, y], "lengthM": number }],
+  "planBounds": { "min": [x, y], "max": [x, y] },
   "confidence": number,
   "notes": "string"
 }
 
 Trace only what is drawn:
-- Coordinates are pixels on the FULL image, including empty margin. A wall drawn in the middle of a ${size ? `${size.width}×${size.height}` : 'WxH'} page is near the middle pixel, not 0.
+- Coordinates are pixels on the FULL image, including empty margin. A wall drawn in the middle of a ${size ? `${size.width}×${size.height}` : 'WxH'} page is near the middle pixel, not 0 and not ~300 on a fake 1000 canvas.
 - Follow the ink. Room polygons are the inner face of the drawn wall lines, vertex by vertex, including every jog, niche, and thickness change.
+- Each room polygon MUST contain that room's printed label pixel from the observation pass when one exists.
+- If a room has a printed area, set labeledAreaSqM. If a room has no printed area, infer a plausible m² from its polygon vs rooms that do have printed areas (same drawing scale). Do not invent a second area for a room that already has a printed one.
+- name/kind come from printed labels when present; otherwise a short generic name.
 - Do not replace a room with its axis-aligned bounding box. An L-shaped or irregular room stays L-shaped or irregular.
 - Include every enclosed space whose walls are drawn, even if it has no number. Do not omit a wing of the apartment.
 - Furniture, fixtures, and dimension arrows are not rooms and not walls.
-- name/kind come from printed labels when present; otherwise a short generic name.
-- labeledAreaSqM only if that room has a printed area.
 - doors: a door leaf and/or swing arc is drawn. at = midpoint on the wall.
 - openings: a gap through a wall with no door leaf and no swing. Do not turn this into a door.
 - Do not add a door, opening, or window that is not drawn, even if a room would otherwise be unreachable.
 - windows: only window symbols / glazed openings that are drawn.
+- planBounds: outer-wall AABB in the same full-image pixels as the polygons.
 - dimensions: copy printed linear sizes (already converted to metres) with endpoints in pixels.
 - width of doors/windows/openings is metres.
 - confidence 0..1.`
@@ -289,9 +326,45 @@ function landmarkUserPrompt(size: ImageSize): string {
 function traceUserPrompt(size?: ImageSize, observation?: string): string {
   const sizeLine = size ? `Scan size ${size.width}×${size.height}. ` : ''
   const observed = observation
-    ? `\n\nText, areas, lengths, and furniture already read from this drawing:\n${observation}\nUse these as the source of labels and scale. Do not turn furniture into rooms. Do not add doors that were not listed or drawn.`
+    ? `\n\nInventory already read from this drawing (labels and furniture in full-image pixels):\n${observation}\nMentally erase furniture. Trace wall inner faces only. Each room polygon must contain that room's labelAt when present. Do not add doors that were not listed or drawn. Coordinates must match those label pixels, not a 0..1000 square.`
     : ''
-  return `${sizeLine}Trace walls, rooms, doors, openings, and windows exactly as drawn. All coordinates are pixels on this ${size ? `${size.width}×${size.height}` : ''} image, not 0..1.${observed}`
+  return `${sizeLine}Trace walls, rooms, doors, openings, and windows exactly as drawn. All coordinates are pixels on this ${size ? `${size.width}×${size.height}` : ''} image — not 0..1, not a ~1000 square.${observed}`
+}
+
+export function pixelRetryUserPrompt(
+  size: ImageSize,
+  previous: ExtractedFloorplan,
+  observation?: string,
+): string {
+  const maxAbs = extractMaxAbs(previous)
+  const observed = observation
+    ? `\n\nObservation (full-image pixels; polygons must contain these labelAt points):\n${observation}`
+    : ''
+  return `Scan size ${size.width}×${size.height}. Your previous JSON used the WRONG coordinate space (max abs ${maxAbs.toFixed(1)}). That is not full-image pixels.
+
+Redo the trace. Every vertex is a pixel on this ${size.width}×${size.height} raster (origin top-left, including margin).
+Forbidden: 0..1 fractions; a 0..1000 square (typical tell: x around 295..985 on a wider page); metres.
+The white paper margin has no rooms. Gray outer walls are inset from the page edges — look at the ink.
+Mentally erase furniture. Follow wall inner faces only.
+Do not add doors, openings, or windows that are not drawn.
+Return ONLY JSON with the same schema as before.${observed}`
+}
+
+export function floorplanVisionPrompts(
+  size?: ImageSize,
+  observation?: string,
+): {
+  observeSystem: string
+  observeUser: string
+  traceSystem: string
+  traceUser: string
+} {
+  return {
+    observeSystem: observeSystemPrompt(size),
+    observeUser: observeUserPrompt(size),
+    traceSystem: traceSystemPrompt(size),
+    traceUser: traceUserPrompt(size, observation),
+  }
 }
 
 function stripFences(raw: string): string {
