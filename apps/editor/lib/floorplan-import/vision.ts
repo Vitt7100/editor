@@ -48,7 +48,7 @@ export const UNCONFIGURED_MESSAGE = UNCONFIGURED_USER_MESSAGE
 export const UNCONFIGURED_ADMIN_LOG =
   'Set OPENROUTER_API_KEY in .env.local, then restart the editor.'
 
-const DEFAULT_OPENROUTER_MODEL = 'deepseek/deepseek-v4.1-flash'
+const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-4.1'
 const DEFAULT_OPENROUTER_CLEAN_MODEL = 'openai/gpt-image-1'
 const DEFAULT_OPENAI_MODEL = 'gpt-4.1'
 const DEFAULT_ANTHROPIC_MODEL = 'claude-sonnet-4-5'
