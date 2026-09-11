@@ -49,6 +49,7 @@ export const extractedFloorplanSchema = z.object({
   openings: z.array(extractedOpeningSchema).default([]),
   windows: z.array(extractedWindowSchema).default([]),
   dimensions: z.array(extractedDimensionSchema).default([]),
+  totalAreaSqM: z.number().positive().optional(),
   planBounds: z
     .object({
       min: vec2Schema,
@@ -59,9 +60,33 @@ export const extractedFloorplanSchema = z.object({
   notes: z.string().optional(),
 })
 
+export const floorplanUnderstandRoomSchema = z.object({
+  name: z.string().optional(),
+  kind: z.enum(roomKinds).optional(),
+  number: z.string().optional(),
+  areaSqM: z.number().positive().optional(),
+  labelAt: vec2Schema.optional(),
+})
+
+/** Step 1 (UNDERSTAND) — labels, openings, clutter, printed measures. No polygons. */
+export const floorplanUnderstandSchema = z.object({
+  rooms: z.array(floorplanUnderstandRoomSchema).default([]),
+  doors: z.array(extractedOpeningSchema).default([]),
+  openings: z.array(extractedOpeningSchema).default([]),
+  windows: z.array(extractedWindowSchema).default([]),
+  dimensions: z.array(extractedDimensionSchema).default([]),
+  totalAreaSqM: z.number().positive().optional(),
+  hasFurniture: z.boolean().default(false),
+  hasClutter: z.boolean().default(false),
+  hasPrintedAreas: z.boolean().default(false),
+  hasPrintedDimensions: z.boolean().default(false),
+  notes: z.string().optional(),
+})
+
 export type ExtractedFloorplan = z.infer<typeof extractedFloorplanSchema>
 export type ExtractedRoom = z.infer<typeof extractedRoomSchema>
 export type ExtractedDimension = z.infer<typeof extractedDimensionSchema>
+export type FloorplanUnderstand = z.infer<typeof floorplanUnderstandSchema>
 export type Vec2 = z.infer<typeof vec2Schema>
 
 export const DEFAULT_WALL_HEIGHT = 2.7
@@ -86,12 +111,28 @@ export const DEFAULT_DOOR_HEIGHT = 2.1
 export const DEFAULT_WINDOW_WIDTH = 1.2
 export const DEFAULT_WINDOW_HEIGHT = 1.4
 export const DEFAULT_WINDOW_SILL = 0.9
+/** Typical apartment openings. Wider values are pixel-like, not metres. */
+export const MAX_DOOR_WIDTH_M = 3
+export const MAX_OPENING_WIDTH_M = 4
+export const MAX_WINDOW_WIDTH_M = 4.5
 export const SNAP_GRID = 0.05
 export const MIN_WALL_LENGTH = 0.2
 export const OPENING_MATCH_DISTANCE = 0.45
 export const VERTEX_WELD_TOLERANCE = 0.08
 export const MIN_ABSOLUTE_ROOM_AREA = 0.08
 export const FALLBACK_PLAN_WIDTH_M = 10
+
+export const ROOM_KIND_LABELS: Record<RoomKind, string> = {
+  living: 'Living',
+  bedroom: 'Bedroom',
+  bathroom: 'Bathroom',
+  kitchen: 'Kitchen',
+  hallway: 'Hallway',
+  entry: 'Entry',
+  balcony: 'Balcony',
+  storage: 'Storage',
+  other: 'Room',
+}
 
 export const ROOM_COLORS: Record<RoomKind, string> = {
   living: '#60a5fa',
@@ -103,4 +144,28 @@ export const ROOM_COLORS: Record<RoomKind, string> = {
   balcony: '#86efac',
   storage: '#d6d3d1',
   other: '#93c5fd',
+}
+
+/** Keep metre opening widths; drop pixel-like values so callers use defaults. */
+export function sanitizeMetreWidth(width: number | undefined, maxM: number): number | undefined {
+  if (width == null || !Number.isFinite(width) || width <= 0) return undefined
+  if (width > maxM) return undefined
+  return width
+}
+
+const AREA_WITH_UNIT = /^(\d+(?:[.,]\d+)?)\s*(?:m²|м²|кв\.?\s*м|sq\.?\s*m|m2|м2)$/iu
+const AREA_DECIMAL = /^(\d+[.,]\d+)$/
+
+/** True when a "name" is only a printed area (e.g. "12.5 м²"), not a room title. */
+export function isPrintedAreaLabel(value: string): boolean {
+  const trimmed = value.trim()
+  return AREA_WITH_UNIT.test(trimmed) || AREA_DECIMAL.test(trimmed)
+}
+
+export function parsePrintedAreaLabel(value: string): number | undefined {
+  const trimmed = value.trim()
+  const match = trimmed.match(AREA_WITH_UNIT) ?? trimmed.match(AREA_DECIMAL)
+  if (!match?.[1]) return undefined
+  const parsed = Number(match[1].replace(',', '.'))
+  return parsed > 0 && parsed < 1000 ? parsed : undefined
 }

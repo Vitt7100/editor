@@ -1,14 +1,15 @@
 /**
- * Live clean-then-trace against OpenRouter.
+ * Live understand → optional clean → measure against OpenRouter.
  *
  * Put OPENROUTER_API_KEY in repo-root .env.local, then:
  *
  *   bun apps/editor/scripts/capture-vision.ts \
  *     apps/editor/lib/floorplan-import/fixtures/failing-001-px2/failing-001.jpg \
- *     /tmp/floorplan-clean-trace
+ *     /tmp/floorplan-understand
  *
- * Pass A writes cleaned.png (walls-only). Pass B+C write extract.json.
- * overlay.html draws those polygons on the original scan.
+ * Pass 1 writes observation.json (understand).
+ * Pass 2 writes cleaned.png only when furniture/clutter was found.
+ * Pass 3 writes extract.json. overlay.html draws those polygons on the original scan.
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
@@ -140,15 +141,17 @@ console.log(
   JSON.stringify({
     image: basename(imagePath),
     imageSize,
-    contentBox,
     provider: debug.provider,
     model: debug.model,
     rooms: debug.extracted.rooms.length,
     doors: debug.extracted.doors.length,
     openings: debug.extracted.openings?.length ?? 0,
     windows: debug.extracted.windows.length,
+    dimensions: debug.extracted.dimensions?.length ?? 0,
+    totalAreaSqM: debug.extracted.totalAreaSqM,
     maxAbs: Number(extractMaxAbs(debug.extracted).toFixed(4)),
     overlayMaxAbs: Number(extractMaxAbs(overlayExtracted(debug.extracted, imageSize)).toFixed(4)),
+    needsClean: Boolean(debug.needsClean),
     cleaned: Boolean(debug.cleaned),
     cleanModel: debug.cleanModel,
     outDir,

@@ -12,11 +12,19 @@ import { type ImageSize, parseImageSize } from './image-size'
 import { UNCONFIGURED_USER_MESSAGE } from './import-copy'
 import {
   type ExtractedFloorplan,
+  type ExtractedRoom,
   extractedFloorplanSchema,
-  extractedOpeningSchema,
-  extractedWindowSchema,
+  type FloorplanUnderstand,
+  floorplanUnderstandSchema,
+  isPrintedAreaLabel,
+  MAX_DOOR_WIDTH_M,
+  MAX_OPENING_WIDTH_M,
+  MAX_WINDOW_WIDTH_M,
+  parsePrintedAreaLabel,
+  ROOM_KIND_LABELS,
   type RoomKind,
   roomKinds,
+  sanitizeMetreWidth,
 } from './schema'
 
 export class VisionUnavailableError extends Error {
@@ -49,13 +57,13 @@ export const UNCONFIGURED_ADMIN_LOG =
   'Set OPENROUTER_API_KEY in .env.local, then restart the editor.'
 
 const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-4.1'
-const DEFAULT_OPENROUTER_CLEAN_MODEL = 'openai/gpt-image-1'
+const DEFAULT_OPENROUTER_CLEAN_MODEL = 'openai/gpt-image-2.5-flare'
 const DEFAULT_OPENAI_MODEL = 'gpt-4.1'
 const DEFAULT_ANTHROPIC_MODEL = 'claude-sonnet-4-5'
 
-/** Owner-proven walls-only clean. Keep this short — the image model follows it in one shot. */
+/** Conditional clean only. Keep this short — the image model follows it in one shot. */
 export const CLEAN_WALLS_PROMPT =
-  'Очисти этот план квартиры, оставив только внутренние и наружные стены.\nClean this apartment floor plan, leaving only interior and exterior walls.'
+  'Очисти этот план квартиры, оставив только стены, окна и двери.\nClean this apartment floor plan, leaving only walls, windows, and doors.'
 
 export function getConfiguredVisionProvider(): VisionProvider | null {
   if (process.env.OPENROUTER_API_KEY) return 'openrouter'
@@ -72,6 +80,7 @@ export type FloorplanExtractDebug = {
   raw: string
   extracted: ExtractedFloorplan
   cleaned?: VisionImage
+  needsClean?: boolean
 }
 
 export async function extractFloorplanFromImage(image: VisionImage): Promise<ExtractedFloorplan> {
@@ -88,8 +97,29 @@ export async function extractFloorplanDebug(image: VisionImage): Promise<Floorpl
   const originalSize =
     image.width && image.height ? { width: image.width, height: image.height } : undefined
 
+  // 1) UNDERSTAND — one vision pass on the original drawing.
+  //    Rooms, openings, labels, clutter, printed measures. No polygons yet.
+  let observation = '{}'
+  let understood: FloorplanUnderstand | null = null
+  try {
+    observation = await runVisionPass(
+      provider,
+      image,
+      originalSize,
+      understandSystemPrompt(originalSize),
+      understandUserPrompt(originalSize),
+    )
+    understood = parseUnderstandJson(observation)
+  } catch {
+    observation = '{}'
+    understood = null
+  }
+
+  // 2) CLEAN (conditional) — only if furniture/clutter is present.
+  //    Skip when the plan is already walls + doors + windows.
+  const shouldClean = Boolean(understood && needsClean(understood) && provider === 'openrouter')
   let cleaned: VisionImage | undefined
-  if (provider === 'openrouter') {
+  if (shouldClean) {
     try {
       cleaned = await cleanWallsImage(image)
     } catch {
@@ -97,6 +127,8 @@ export async function extractFloorplanDebug(image: VisionImage): Promise<Floorpl
     }
   }
 
+  // 3) MEASURE → JSON — trace geometry, then bind printed areas/dimensions.
+  //    If none were printed, leave those fields empty (scale from proportions later).
   const traceImage = cleaned ?? image
   const traceSize =
     traceImage.width && traceImage.height
@@ -107,8 +139,8 @@ export async function extractFloorplanDebug(image: VisionImage): Promise<Floorpl
     provider,
     traceImage,
     traceSize,
-    traceSystemPrompt(traceSize),
-    traceUserPrompt(traceSize),
+    measureSystemPrompt(traceSize),
+    measureUserPrompt(traceSize),
   )
   let extracted = parseVisionJson(raw)
   if (traceSize && needsPixelRetry(extracted, traceSize)) {
@@ -117,7 +149,7 @@ export async function extractFloorplanDebug(image: VisionImage): Promise<Floorpl
         provider,
         traceImage,
         traceSize,
-        traceSystemPrompt(traceSize),
+        measureSystemPrompt(traceSize),
         pixelRetryUserPrompt(traceSize, extracted),
       )
       extracted = parseVisionJson(raw)
@@ -129,21 +161,9 @@ export async function extractFloorplanDebug(image: VisionImage): Promise<Floorpl
     extracted = scaleExtractedToImage(extracted, traceSize, originalSize)
   }
 
-  let observation = '{}'
-  if (originalSize) {
-    try {
-      observation = await runVisionPass(
-        provider,
-        image,
-        originalSize,
-        labelSystemPrompt(originalSize),
-        labelUserPrompt(originalSize),
-      )
-      extracted = attachRoomLabels(extracted, observation)
-    } catch {
-      observation = '{}'
-    }
-  }
+  extracted = understood
+    ? applyUnderstandToExtract(extracted, understood)
+    : sanitizeExtracted(extracted)
 
   return {
     provider,
@@ -153,6 +173,7 @@ export async function extractFloorplanDebug(image: VisionImage): Promise<Floorpl
     raw,
     extracted,
     cleaned,
+    needsClean: shouldClean,
   }
 }
 
@@ -246,8 +267,8 @@ function pixelRule(size?: ImageSize): string {
   return 'Coordinates are pixels of the full image, origin top-left. Not 0..1, not a 0..1000 square.'
 }
 
-function labelSystemPrompt(size?: ImageSize): string {
-  return `Read labels and drawn openings on this floor-plan drawing. Return ONLY JSON.
+function understandSystemPrompt(size?: ImageSize): string {
+  return `Read this floor-plan drawing. Return ONLY JSON. Do not trace wall polygons.
 ${pixelRule(size)}
 
 Schema:
@@ -255,24 +276,35 @@ Schema:
   "rooms": [{ "name": "string", "kind": "living"|"bedroom"|"bathroom"|"kitchen"|"hallway"|"entry"|"balcony"|"storage"|"other", "number": "string", "areaSqM": number, "labelAt": [x, y] }],
   "doors": [{ "at": [x, y], "width": number, "openingKind": "door", "hingesSide": "left"|"right", "swingDirection": "inward"|"outward" }],
   "openings": [{ "at": [x, y], "width": number, "openingKind": "opening" }],
-  "windows": [{ "at": [x, y], "width": number }]
+  "windows": [{ "at": [x, y], "width": number }],
+  "dimensions": [{ "start": [x, y], "end": [x, y], "lengthM": number }],
+  "totalAreaSqM": number,
+  "hasFurniture": boolean,
+  "hasClutter": boolean,
+  "hasPrintedAreas": boolean,
+  "hasPrintedDimensions": boolean
 }
 
-Copy text as written. Do not invent doors, openings, or windows.`
+Rules:
+- Copy labels as written. Room name is the room title, never a printed area (12.5 м² goes in areaSqM only).
+- areaSqM, totalAreaSqM, and dimensions.lengthM only when that number is printed on the drawing. Do not invent or estimate.
+- Opening width is metres (typical door 0.7–1.2, window 0.9–2.0). Never pixel widths.
+- hasFurniture / hasClutter: true only when the drawing shows furniture or other non-structural junk. A walls+doors+windows plan is false/false.
+- Do not invent doors, openings, windows, or dimensions.`
 }
 
-function labelUserPrompt(size?: ImageSize): string {
+function understandUserPrompt(size?: ImageSize): string {
   const sizeLine = size ? `Scan size ${size.width}×${size.height}. ` : ''
-  return `${sizeLine}Read room names, numbers, printed areas, and any drawn doors/windows. Full-image pixels. Do not trace wall polygons.`
+  return `${sizeLine}Understand this floor plan: rooms, walls, doors/windows, labels, furniture/clutter, printed dimensions or areas. Full-image pixels. Return ONLY JSON.`
 }
 
-function traceSystemPrompt(size?: ImageSize): string {
-  return `You trace a walls-only floor plan into JSON. Return ONLY JSON.
+function measureSystemPrompt(size?: ImageSize): string {
+  return `You trace a floor plan into JSON. Return ONLY JSON.
 ${pixelRule(size)} Origin top-left, x right, y down.
 
 Schema:
 {
-  "rooms": [{ "name": "string", "kind": "living"|"bedroom"|"bathroom"|"kitchen"|"hallway"|"entry"|"balcony"|"storage"|"other", "polygon": [[x, y], ...], "labeledAreaSqM": number, "roomNumber": "string" }],
+  "rooms": [{ "name": "string", "kind": "living"|"bedroom"|"bathroom"|"kitchen"|"hallway"|"entry"|"balcony"|"storage"|"other", "polygon": [[x, y], ...], "roomNumber": "string" }],
   "doors": [],
   "openings": [],
   "windows": [],
@@ -282,52 +314,81 @@ Schema:
   "notes": "string"
 }
 
-Follow inner wall faces, including every niche and jog. Do not simplify extra corners into an L or T box. Do not add doors that are not drawn.`
+Follow inner wall faces, including every niche and jog. Do not simplify extra corners into an L or T box. Do not add doors that are not drawn. Do not invent labeledAreaSqM or dimensions. Opening width is metres, never pixels. Room name is the title, never a printed area.`
 }
 
-function traceUserPrompt(size?: ImageSize): string {
+function measureUserPrompt(size?: ImageSize): string {
   const sizeLine = size ? `Scan size ${size.width}×${size.height}. ` : ''
-  return `${sizeLine}Trace room polygons from this walls-only plan. Inner faces, every niche/jog. Full-image pixels. Return ONLY JSON.`
+  return `${sizeLine}Trace room polygons. Inner faces, every niche/jog. Full-image pixels. Return ONLY JSON.`
 }
 
 export function pixelRetryUserPrompt(size: ImageSize, previous: ExtractedFloorplan): string {
   const maxAbs = extractMaxAbs(previous)
-  return `Scan size ${size.width}×${size.height}. Previous JSON used the wrong coordinate space (max abs ${maxAbs.toFixed(1)}). Redo in full-image pixels. Forbidden: 0..1; a 0..1000 square; metres. Follow inner faces including niches. Do not add doors that are not drawn. Return ONLY JSON.`
+  return `Scan size ${size.width}×${size.height}. Previous JSON used the wrong coordinate space (max abs ${maxAbs.toFixed(1)}). Redo in full-image pixels. Forbidden: 0..1; a 0..1000 square; metres. Follow inner faces including niches. Do not add doors that are not drawn. Do not invent labeledAreaSqM. Opening width is metres, never pixels. Return ONLY JSON.`
 }
 
 export function floorplanVisionPrompts(size?: ImageSize): {
+  understandSystem: string
+  understandUser: string
   clean: string
+  measureSystem: string
+  measureUser: string
   observeSystem: string
   observeUser: string
   traceSystem: string
   traceUser: string
 } {
+  const understandSystem = understandSystemPrompt(size)
+  const understandUser = understandUserPrompt(size)
+  const measureSystem = measureSystemPrompt(size)
+  const measureUser = measureUserPrompt(size)
   return {
+    understandSystem,
+    understandUser,
     clean: CLEAN_WALLS_PROMPT,
-    observeSystem: labelSystemPrompt(size),
-    observeUser: labelUserPrompt(size),
-    traceSystem: traceSystemPrompt(size),
-    traceUser: traceUserPrompt(size),
+    measureSystem,
+    measureUser,
+    observeSystem: understandSystem,
+    observeUser: understandUser,
+    traceSystem: measureSystem,
+    traceUser: measureUser,
   }
 }
 
 const KIND_SET = new Set<string>(roomKinds)
 
-export function attachRoomLabels(extracted: ExtractedFloorplan, raw: string): ExtractedFloorplan {
+export function needsClean(understood: { hasFurniture?: boolean; hasClutter?: boolean }): boolean {
+  return Boolean(understood.hasFurniture || understood.hasClutter)
+}
+
+export function parseUnderstandJson(raw: string): FloorplanUnderstand | null {
   let parsed: unknown
   try {
     parsed = JSON.parse(stripFences(raw))
   } catch {
-    return extracted
+    return null
   }
-  if (!parsed || typeof parsed !== 'object') return extracted
-  const record = parsed as Record<string, unknown>
-  const labels = Array.isArray(record.rooms) ? record.rooms : []
-  const rooms = extracted.rooms.map((room) => ({ ...room }))
-  for (const label of labels) {
-    if (!label || typeof label !== 'object') continue
-    const row = label as Record<string, unknown>
-    const at = asPair(row.labelAt)
+  const result = floorplanUnderstandSchema.safeParse(parsed)
+  return result.success ? result.data : null
+}
+
+export function attachRoomLabels(extracted: ExtractedFloorplan, raw: string): ExtractedFloorplan {
+  const understood = parseUnderstandJson(raw)
+  if (!understood) return sanitizeExtracted(extracted)
+  return applyUnderstandToExtract(extracted, understood)
+}
+
+export function applyUnderstandToExtract(
+  extracted: ExtractedFloorplan,
+  understood: FloorplanUnderstand,
+): ExtractedFloorplan {
+  const rooms = extracted.rooms.map((room) => ({
+    ...room,
+    labeledAreaSqM: undefined as number | undefined,
+  }))
+
+  for (const label of understood.rooms) {
+    const at = label.labelAt
     if (!at) continue
     let bestIndex: number | null = null
     let bestArea = Number.POSITIVE_INFINITY
@@ -341,42 +402,77 @@ export function attachRoomLabels(extracted: ExtractedFloorplan, raw: string): Ex
     })
     if (bestIndex == null) continue
     const room = rooms[bestIndex]!
-    const name = typeof row.name === 'string' && row.name.trim() ? row.name.trim() : room.name
-    const kind =
-      typeof row.kind === 'string' && KIND_SET.has(row.kind) ? (row.kind as RoomKind) : room.kind
+    const kind = label.kind && KIND_SET.has(label.kind) ? (label.kind as RoomKind) : room.kind
+    const printedFromName = label.name ? parsePrintedAreaLabel(label.name) : undefined
     const number =
-      typeof row.number === 'string' && row.number.trim() ? row.number.trim() : room.roomNumber
-    const areaSqM =
-      typeof row.areaSqM === 'number' && row.areaSqM > 0 ? row.areaSqM : room.labeledAreaSqM
+      typeof label.number === 'string' && label.number.trim()
+        ? label.number.trim()
+        : room.roomNumber
     rooms[bestIndex] = {
       ...room,
-      name,
+      name: roomDisplayName(label.name, kind, room.name),
       kind,
       roomNumber: number,
-      labeledAreaSqM: areaSqM,
+      labeledAreaSqM: label.areaSqM && label.areaSqM > 0 ? label.areaSqM : printedFromName,
     }
   }
 
-  const doors = Array.isArray(record.doors)
-    ? record.doors.flatMap((entry) => {
-        const result = extractedOpeningSchema.safeParse(entry)
-        return result.success ? [result.data] : []
-      })
-    : extracted.doors
-  const openings = Array.isArray(record.openings)
-    ? record.openings.flatMap((entry) => {
-        const result = extractedOpeningSchema.safeParse(entry)
-        return result.success ? [result.data] : []
-      })
-    : extracted.openings
-  const windows = Array.isArray(record.windows)
-    ? record.windows.flatMap((entry) => {
-        const result = extractedWindowSchema.safeParse(entry)
-        return result.success ? [result.data] : []
-      })
-    : extracted.windows
+  const doors =
+    understood.doors.length > 0
+      ? understood.doors.map((door) => sanitizeOpening(door, MAX_DOOR_WIDTH_M))
+      : extracted.doors.map((door) => sanitizeOpening(door, MAX_DOOR_WIDTH_M))
+  const openings =
+    understood.openings.length > 0
+      ? understood.openings.map((opening) => sanitizeOpening(opening, MAX_OPENING_WIDTH_M))
+      : extracted.openings.map((opening) => sanitizeOpening(opening, MAX_OPENING_WIDTH_M))
+  const windows =
+    understood.windows.length > 0
+      ? understood.windows.map((window) => sanitizeWindow(window))
+      : extracted.windows.map((window) => sanitizeWindow(window))
 
-  return { ...extracted, rooms, doors, openings, windows }
+  return {
+    ...extracted,
+    rooms: rooms.map(sanitizeRoomName),
+    doors,
+    openings,
+    windows,
+    dimensions: understood.dimensions,
+    totalAreaSqM: understood.totalAreaSqM,
+  }
+}
+
+export function sanitizeExtracted(extracted: ExtractedFloorplan): ExtractedFloorplan {
+  return {
+    ...extracted,
+    rooms: extracted.rooms.map(sanitizeRoomName),
+    doors: extracted.doors.map((door) => sanitizeOpening(door, MAX_DOOR_WIDTH_M)),
+    openings: extracted.openings.map((opening) => sanitizeOpening(opening, MAX_OPENING_WIDTH_M)),
+    windows: extracted.windows.map((window) => sanitizeWindow(window)),
+  }
+}
+
+function roomDisplayName(name: string | undefined, kind: RoomKind, fallback: string): string {
+  const trimmed = name?.trim() ?? ''
+  if (trimmed && !isPrintedAreaLabel(trimmed)) return trimmed
+  if (fallback && !isPrintedAreaLabel(fallback)) return fallback
+  return ROOM_KIND_LABELS[kind]
+}
+
+function sanitizeRoomName(room: ExtractedRoom): ExtractedRoom {
+  const printed = parsePrintedAreaLabel(room.name)
+  return {
+    ...room,
+    name: isPrintedAreaLabel(room.name) ? ROOM_KIND_LABELS[room.kind] : room.name,
+    labeledAreaSqM: room.labeledAreaSqM ?? printed,
+  }
+}
+
+function sanitizeOpening<T extends { width?: number }>(opening: T, maxM: number): T {
+  return { ...opening, width: sanitizeMetreWidth(opening.width, maxM) }
+}
+
+function sanitizeWindow<T extends { width?: number }>(window: T): T {
+  return { ...window, width: sanitizeMetreWidth(window.width, MAX_WINDOW_WIDTH_M) }
 }
 
 export async function cleanWallsImage(image: VisionImage): Promise<VisionImage> {

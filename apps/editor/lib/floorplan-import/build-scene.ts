@@ -43,11 +43,15 @@ import {
   type ExtractedRoom,
   FALLBACK_PLAN_WIDTH_M,
   INTERIOR_WALL_THICKNESS,
+  MAX_DOOR_WIDTH_M,
+  MAX_OPENING_WIDTH_M,
+  MAX_WINDOW_WIDTH_M,
   MIN_ABSOLUTE_ROOM_AREA,
   MIN_WALL_LENGTH,
   OPENING_MATCH_DISTANCE,
   ROOM_COLORS,
   type RoomKind,
+  sanitizeMetreWidth,
   VERTEX_WELD_TOLERANCE,
   type Vec2,
 } from './schema'
@@ -114,6 +118,7 @@ export function buildSceneFromFloorplan(
     warnings,
     imageSize && inPixels ? imageSize : null,
     inPixels ? 'pixels' : 'metres',
+    plan.totalAreaSqM,
   )
   if (preparedRooms.length === 0) {
     throw new Error('No usable rooms in the floor plan')
@@ -198,7 +203,7 @@ export function buildSceneFromFloorplan(
       warnings.push(`Window at ${fmt(window.at)} could not be placed on a wall`)
       continue
     }
-    const width = window.width ?? DEFAULT_WINDOW_WIDTH
+    const width = sanitizeMetreWidth(window.width, MAX_WINDOW_WIDTH_M) ?? DEFAULT_WINDOW_WIDTH
     const wallLength = distance2(match.wall.start, match.wall.end)
     if (wallLength + 1e-6 < width) {
       warnings.push(`Window skipped: wall ${match.wall.id} is shorter than ${width} m`)
@@ -307,6 +312,7 @@ function prepareRooms(
   warnings: string[],
   imageSize: ImageSize | null,
   space: 'metres' | 'pixels',
+  totalAreaSqM?: number,
 ): {
   rooms: PreparedRoom[]
   transform: PlanTransform
@@ -329,7 +335,7 @@ function prepareRooms(
     }
   }
 
-  const measured = resolveScale(cleaned, dimensions, space)
+  const measured = resolveScale(cleaned, dimensions, space, totalAreaSqM)
   const scale = Math.abs(measured - 1) < 0.02 ? 1 : measured
   const scaled = cleaned.map((room) => ({
     ...room,
@@ -412,14 +418,26 @@ function resolveScale(
   rooms: PreparedRoom[],
   dimensions: ExtractedDimension[],
   source: 'metres' | 'pixels',
+  totalAreaSqM?: number,
 ): number {
-  const ratios = [...scaleRatiosFromAreas(rooms), ...scaleRatiosFromDimensions(dimensions)]
+  const ratios = [
+    ...scaleRatiosFromAreas(rooms),
+    ...scaleRatiosFromDimensions(dimensions),
+    ...scaleRatiosFromTotalArea(rooms, totalAreaSqM),
+  ]
   if (ratios.length > 0) return median(ratios)
   if (source === 'metres') return 1
   const bounds = polygonBounds(rooms.flatMap((room) => room.polygon))
   const longest = Math.max(bounds.width, bounds.depth)
   if (longest < 1e-6) return 1
   return FALLBACK_PLAN_WIDTH_M / longest
+}
+
+function scaleRatiosFromTotalArea(rooms: PreparedRoom[], totalAreaSqM?: number): number[] {
+  if (!totalAreaSqM || totalAreaSqM <= 0) return []
+  const area = rooms.reduce((sum, room) => sum + polygonArea(room.polygon), 0)
+  if (area < 0.05) return []
+  return [Math.sqrt(totalAreaSqM / area)]
 }
 
 function scaleRatiosFromAreas(rooms: PreparedRoom[]): number[] {
@@ -529,7 +547,8 @@ function placeDoor(
     warnings.push(`Door at ${fmt(door.at)} could not be placed on a wall`)
     return false
   }
-  const width = door.width ?? DEFAULT_DOOR_WIDTH
+  const maxWidth = door.openingKind === 'opening' ? MAX_OPENING_WIDTH_M : MAX_DOOR_WIDTH_M
+  const width = sanitizeMetreWidth(door.width, maxWidth) ?? DEFAULT_DOOR_WIDTH
   const wallLength = distance2(match.wall.start, match.wall.end)
   if (wallLength + 1e-6 < width) {
     warnings.push(`Door skipped: wall ${match.wall.id} is shorter than ${width} m`)

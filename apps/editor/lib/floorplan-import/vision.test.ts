@@ -3,13 +3,17 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ExtractedFloorplan } from './schema'
 import {
+  applyUnderstandToExtract,
   attachOuterWall,
   attachRoomLabels,
   CLEAN_WALLS_PROMPT,
   floorplanVisionPrompts,
+  needsClean,
   needsPixelRetry,
   parseOuterWallJson,
+  parseUnderstandJson,
   pixelRetryUserPrompt,
+  sanitizeExtracted,
   usesWrongPixelGrid,
 } from './vision'
 
@@ -61,19 +65,26 @@ test('pixel retry prompt forbids the 0..1000 square and keeps the raster size', 
   expect(prompt).toContain('not drawn')
 })
 
-test('clean+trace prompts stay short and keep the owner walls-only clean', () => {
+test('prompts follow understand → optional clean → measure', () => {
   const prompts = floorplanVisionPrompts(FAILING_IMAGE)
   expect(prompts.clean).toBe(CLEAN_WALLS_PROMPT)
   expect(prompts.clean).toContain('Очисти этот план квартиры')
-  expect(prompts.clean).toContain('interior and exterior walls')
+  expect(prompts.clean).toContain('walls, windows, and doors')
   expect(prompts.clean.length).toBeLessThan(300)
-  expect(prompts.traceSystem).toContain('1920')
-  expect(prompts.traceSystem).toContain('niche')
-  expect(prompts.traceSystem).toContain('not drawn')
-  expect(prompts.traceSystem).not.toContain('Mentally erase')
-  expect(prompts.traceUser).toContain('walls-only')
-  expect(prompts.observeSystem).toContain('labelAt')
-  expect(prompts.observeUser).not.toContain('API')
+  expect(prompts.understandSystem).toContain('hasFurniture')
+  expect(prompts.understandSystem).toContain('hasPrintedAreas')
+  expect(prompts.understandSystem).toContain('Do not invent')
+  expect(prompts.understandSystem).toContain('areaSqM only')
+  expect(prompts.understandUser).toContain('furniture/clutter')
+  expect(prompts.understandUser).not.toContain('API')
+  expect(prompts.measureSystem).toContain('1920')
+  expect(prompts.measureSystem).toContain('niche')
+  expect(prompts.measureSystem).toContain('not drawn')
+  expect(prompts.measureSystem).toContain('Do not invent labeledAreaSqM')
+  expect(prompts.measureSystem).not.toContain('Mentally erase')
+  expect(prompts.measureUser).toContain('Trace room polygons')
+  expect(prompts.observeSystem).toBe(prompts.understandSystem)
+  expect(prompts.traceSystem).toBe(prompts.measureSystem)
 })
 
 test('parseOuterWallJson accepts full-image pixels and rejects a ~1000-square', () => {
@@ -113,5 +124,106 @@ test('attachRoomLabels copies names from the original onto cleaned polygons', ()
   const hallway = next.rooms.find((room) => room.kind === 'hallway')
   expect(hallway?.name).toBe('Hallway')
   expect(hallway?.roomNumber).toBe('1')
+  expect(hallway?.labeledAreaSqM).toBe(3.9)
   expect(next.doors).toHaveLength(pixels.doors.length)
+})
+
+test('needsClean is true only when furniture or clutter is present', () => {
+  expect(needsClean({ hasFurniture: false, hasClutter: false })).toBe(false)
+  expect(needsClean({ hasFurniture: true, hasClutter: false })).toBe(true)
+  expect(needsClean({ hasFurniture: false, hasClutter: true })).toBe(true)
+})
+
+test('parseUnderstandJson accepts the understand payload', () => {
+  const understood = parseUnderstandJson(
+    JSON.stringify({
+      rooms: [{ name: 'Hallway', kind: 'hallway', areaSqM: 3.9, labelAt: [1030, 760] }],
+      hasFurniture: true,
+      hasClutter: false,
+      hasPrintedAreas: true,
+      hasPrintedDimensions: false,
+    }),
+  )
+  expect(understood?.hasFurniture).toBe(true)
+  expect(understood?.hasPrintedAreas).toBe(true)
+  expect(understood?.rooms[0]?.areaSqM).toBe(3.9)
+})
+
+test('printed areas attach to rooms; invented tracer areas are dropped', () => {
+  const unlabeled: ExtractedFloorplan = {
+    ...pixels,
+    rooms: pixels.rooms.map((room) => ({
+      ...room,
+      name: 'Room',
+      labeledAreaSqM: 99,
+      roomNumber: undefined,
+    })),
+    dimensions: [{ start: [0, 0], end: [10, 0], lengthM: 8 }],
+  }
+  const understood = parseUnderstandJson(
+    JSON.stringify({
+      rooms: [
+        { name: 'Hallway', kind: 'hallway', number: '1', areaSqM: 3.9, labelAt: [1030, 760] },
+      ],
+      hasFurniture: false,
+      hasClutter: false,
+      hasPrintedAreas: true,
+      hasPrintedDimensions: false,
+      totalAreaSqM: 40,
+    }),
+  )
+  expect(understood).not.toBeNull()
+  const next = applyUnderstandToExtract(unlabeled, understood!)
+  const hallway = next.rooms.find((room) => room.kind === 'hallway')
+  const living = next.rooms.find((room) => room.kind === 'living')
+  expect(hallway?.labeledAreaSqM).toBe(3.9)
+  expect(living?.labeledAreaSqM).toBeUndefined()
+  expect(next.dimensions).toEqual([])
+  expect(next.totalAreaSqM).toBe(40)
+})
+
+test('printed area text is not used as a room name', () => {
+  const unlabeled: ExtractedFloorplan = {
+    ...pixels,
+    rooms: pixels.rooms.map((room) => ({ ...room, name: '12.5 м²' })),
+  }
+  const next = attachRoomLabels(
+    unlabeled,
+    JSON.stringify({
+      rooms: [{ name: '19.4 m2', kind: 'living', labelAt: [700, 500] }],
+    }),
+  )
+  const living = next.rooms.find((room) => room.kind === 'living')
+  expect(living?.name).toBe('Living')
+  expect(living?.labeledAreaSqM).toBe(19.4)
+  expect(next.rooms.find((room) => room.kind === 'hallway')?.name).toBe('Hallway')
+})
+
+test('pixel-like opening widths are dropped; metre widths are kept', () => {
+  const next = sanitizeExtracted({
+    ...pixels,
+    doors: [
+      { at: [743, 129], width: 0.9 },
+      { at: [952, 560], width: 48 },
+    ],
+    windows: [{ at: [464, 450], width: 86 }],
+  })
+  expect(next.doors[0]?.width).toBe(0.9)
+  expect(next.doors[1]?.width).toBeUndefined()
+  expect(next.windows[0]?.width).toBeUndefined()
+})
+
+test('printed length dimensions bind onto the extract', () => {
+  const next = applyUnderstandToExtract(pixels, {
+    rooms: [],
+    doors: [],
+    openings: [],
+    windows: [],
+    dimensions: [{ start: [464, 129], end: [1402, 129], lengthM: 8.4 }],
+    hasFurniture: false,
+    hasClutter: false,
+    hasPrintedAreas: false,
+    hasPrintedDimensions: true,
+  })
+  expect(next.dimensions).toEqual([{ start: [464, 129], end: [1402, 129], lengthM: 8.4 }])
 })

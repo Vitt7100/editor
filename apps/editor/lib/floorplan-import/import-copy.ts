@@ -25,7 +25,7 @@ export const HEIGHT_RANGE_MESSAGE = 'Ceiling height must be between 2.0 and 4.5 
 export const STAGE_LABELS: Record<string, string> = {
   queued: 'Queued…',
   reading: 'Reading the drawing…',
-  'reading-drawing': 'Cleaning walls and tracing rooms…',
+  'reading-drawing': 'Understanding the drawing…',
   'building-scene': 'Building walls…',
   saving: 'Saving the scene…',
   done: 'Done',
