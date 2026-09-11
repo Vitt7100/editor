@@ -14,6 +14,27 @@ export function distance2(a: Vec2, b: Vec2): number {
   return Math.sqrt(dx * dx + dz * dz)
 }
 
+export function polygonCentroid(points: Vec2[]): Vec2 {
+  if (points.length === 0) return [0, 0]
+  const signed = signedPolygonArea(points)
+  if (Math.abs(signed) < 1e-12) {
+    const sx = points.reduce((sum, point) => sum + point[0], 0)
+    const sy = points.reduce((sum, point) => sum + point[1], 0)
+    return [sx / points.length, sy / points.length]
+  }
+  let cx = 0
+  let cy = 0
+  for (let i = 0; i < points.length; i++) {
+    const [x1, y1] = points[i]!
+    const [x2, y2] = points[(i + 1) % points.length]!
+    const cross = x1 * y2 - x2 * y1
+    cx += (x1 + x2) * cross
+    cy += (y1 + y2) * cross
+  }
+  const factor = 1 / (6 * signed)
+  return [cx * factor, cy * factor]
+}
+
 export function polygonArea(points: Vec2[]): number {
   if (points.length < 3) return 0
   let area = 0

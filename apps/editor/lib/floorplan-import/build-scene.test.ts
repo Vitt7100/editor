@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { buildSceneFromFloorplan } from './build-scene'
 import { polygonArea } from './geometry'
-import type { ExtractedFloorplan } from './schema'
+import { DEFAULT_DOOR_WIDTH, type ExtractedFloorplan } from './schema'
 import { parseVisionJson } from './vision'
 
 const twoRooms: ExtractedFloorplan = {
@@ -361,4 +361,60 @@ ${JSON.stringify(twoRooms)}
 \`\`\``)
   expect(parsed.rooms).toHaveLength(2)
   expect(parsed.doors).toHaveLength(1)
+})
+
+test('pixel-like door widths are treated as missing metres', () => {
+  const built = buildSceneFromFloorplan({
+    ...twoRooms,
+    doors: [{ at: [4, 1.2], width: 48 }],
+  })
+  expect(built.doors).toBe(1)
+  const door = Object.values(built.graph.nodes).find((node) => node.type === 'door')
+  expect(door).toMatchObject({ type: 'door', width: DEFAULT_DOOR_WIDTH })
+})
+
+test('printed total area scales rooms when room areas are absent', () => {
+  const plan: ExtractedFloorplan = {
+    ...twoRooms,
+    rooms: twoRooms.rooms.map((room) => ({
+      ...room,
+      labeledAreaSqM: undefined,
+      polygon: room.polygon.map(([x, z]) => [x * 10, z * 10] as [number, number]),
+    })),
+    totalAreaSqM: 40,
+  }
+  const built = buildSceneFromFloorplan(plan)
+  const zones = Object.values(built.graph.nodes).filter((node) => node.type === 'zone')
+  const area = zones.reduce(
+    (sum, zone) => (zone.type === 'zone' ? sum + polygonArea(zone.polygon) : sum),
+    0,
+  )
+  expect(area).toBeCloseTo(40, 0)
+})
+
+test('without printed areas or dimensions, scale uses plan proportions', () => {
+  const plan: ExtractedFloorplan = {
+    rooms: [
+      {
+        name: 'Living',
+        kind: 'living',
+        polygon: [
+          [0, 0],
+          [200, 0],
+          [200, 100],
+          [0, 100],
+        ],
+      },
+    ],
+    doors: [],
+    openings: [],
+    windows: [],
+    dimensions: [],
+    confidence: 0.5,
+  }
+  const built = buildSceneFromFloorplan(plan, { imageSize: { width: 400, height: 200 } })
+  const zone = Object.values(built.graph.nodes).find((node) => node.type === 'zone')
+  expect(zone?.type).toBe('zone')
+  if (zone?.type !== 'zone') return
+  expect(polygonArea(zone.polygon)).toBeCloseTo(50, 0)
 })
